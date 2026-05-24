@@ -25,7 +25,7 @@ def set_config(config: Dict):
     initialize_config()
     incoming = deepcopy(config)
     for key, value in incoming.items():
-        if isinstance(value, dict) and isinstance(_config.get(key), dict):
+        if isinstance(value, dict) and isinstance(_config.get(key), dict) and value:
             _config[key].update(value)
         else:
             _config[key] = value

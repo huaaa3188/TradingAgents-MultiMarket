@@ -14,7 +14,11 @@ def create_market_analyst(llm):
         current_date = state["trade_date"]
         asset_type = state.get("asset_type", "stock")
         instrument_context = build_instrument_context(
-            state["company_of_interest"], asset_type
+            state["company_of_interest"],
+            asset_type,
+            state.get("instrument_type"),
+            state.get("market_type"),
+            state.get("company_display_name"),
         )
 
         tools = [

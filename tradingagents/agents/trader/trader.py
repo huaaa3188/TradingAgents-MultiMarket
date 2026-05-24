@@ -23,7 +23,13 @@ def create_trader(llm):
     def trader_node(state, name):
         company_name = state["company_of_interest"]
         asset_type = state.get("asset_type", "stock")
-        instrument_context = build_instrument_context(company_name, asset_type)
+        instrument_context = build_instrument_context(
+            company_name,
+            asset_type,
+            state.get("instrument_type"),
+            state.get("market_type"),
+            state.get("company_display_name"),
+        )
         investment_plan = state["investment_plan"]
 
         messages = [

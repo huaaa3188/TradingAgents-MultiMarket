@@ -7,12 +7,19 @@ from dotenv import find_dotenv, set_key
 from rich.console import Console
 
 from cli.models import AnalystType, AssetType
+from tradingagents.dataflows.instruments import (
+    InstrumentType,
+    MarketType,
+    detect_instrument_type,
+    detect_market_type,
+    normalize_ticker_symbol as normalize_instrument_symbol,
+)
 from tradingagents.llm_clients.api_key_env import get_api_key_env
 from tradingagents.llm_clients.model_catalog import get_model_options
 
 console = Console()
 
-TICKER_INPUT_EXAMPLES = "Examples: SPY, CNC.TO, 7203.T, 0700.HK"
+TICKER_INPUT_EXAMPLES = "Examples: SPY, CNC.TO, 7203.T, 0700.HK, 600519, 510300"
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),
@@ -20,9 +27,6 @@ ANALYST_ORDER = [
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
 ]
-
-CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
-
 
 def get_ticker() -> str:
     """Prompt the user to enter a ticker symbol."""
@@ -45,13 +49,12 @@ def get_ticker() -> str:
 
 
 def normalize_ticker_symbol(ticker: str) -> str:
-    """Normalize ticker input while preserving exchange suffixes."""
-    return ticker.strip().upper()
+    """Normalize ticker input while preserving or adding known exchange suffixes."""
+    return normalize_instrument_symbol(ticker)
 
 
 def detect_asset_type(ticker: str) -> AssetType:
-    normalized_ticker = ticker.strip().upper()
-    if normalized_ticker.endswith(CRYPTO_SUFFIXES):
+    if detect_instrument_type(ticker) == InstrumentType.CRYPTO:
         return AssetType.CRYPTO
     return AssetType.STOCK
 

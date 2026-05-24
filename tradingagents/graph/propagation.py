@@ -6,6 +6,11 @@ from tradingagents.agents.utils.agent_states import (
     InvestDebateState,
     RiskDebateState,
 )
+from tradingagents.dataflows.instruments import (
+    MarketType,
+    detect_instrument_type,
+    detect_market_type,
+)
 
 
 class Propagator:
@@ -20,13 +25,25 @@ class Propagator:
         company_name: str,
         trade_date: str,
         asset_type: str = "stock",
+        instrument_type: str = None,
+        market_type: str = None,
         past_context: str = "",
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
+        resolved_instrument_type = instrument_type or detect_instrument_type(company_name).value
+        resolved_market_type = market_type or detect_market_type(company_name).value
+        resolved_display_name = company_name
+        if resolved_market_type == MarketType.CN_A.value:
+            from tradingagents.dataflows.akshare import get_ticker_display_name
+
+            resolved_display_name = get_ticker_display_name(company_name)
         return {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
+            "company_display_name": resolved_display_name,
             "asset_type": asset_type,
+            "instrument_type": resolved_instrument_type,
+            "market_type": resolved_market_type,
             "trade_date": str(trade_date),
             "past_context": past_context,
             "investment_debate_state": InvestDebateState(

@@ -505,14 +505,19 @@ def get_user_selections():
     console.print(
         create_question_box(
             "Step 1: Ticker Symbol",
-            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK)",
+            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK, 600519, 510300)",
             "SPY",
         )
     )
     selected_ticker = get_ticker()
     asset_type = detect_asset_type(selected_ticker)
+    instrument_type = detect_instrument_type(selected_ticker)
+    market_type = detect_market_type(selected_ticker)
     console.print(
         f"[green]Detected asset type:[/green] {asset_type.value}"
+    )
+    console.print(
+        f"[green]Detected market/instrument:[/green] {market_type.value} / {instrument_type.value}"
     )
 
     # Step 2: Analysis date
@@ -625,6 +630,8 @@ def get_user_selections():
     return {
         "ticker": selected_ticker,
         "asset_type": asset_type.value,
+        "instrument_type": instrument_type.value,
+        "market_type": market_type.value,
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
@@ -643,23 +650,30 @@ def get_ticker():
     """Get ticker symbol from user input, preserving exchange suffixes."""
     # typer.prompt strips trailing dot-suffixes on some shells (e.g. 000404.SH
     # collapses to 000404). questionary.text reads the raw line.
+    def validate_ticker(value: str):
+        # 1. 过滤掉潜在的不可见控制序列或控制字符
+        cleaned = "".join(ch for ch in value if ch.isprintable() and not ch.isspace())
+        # 2. 如果为空，直接允许（回退默认 SPY）
+        if not cleaned:
+            return True
+        # 3. 检查是否全是合理字符，限制长度
+        import re
+        if re.match(r"^[A-Za-z0-9._\-^]+$", cleaned) and len(cleaned) <= 32:
+            return True
+        return "Please enter a valid ticker symbol, e.g. AAPL, 000404.SZ, 0700.HK."
+
     ticker = questionary.text(
         "",
-        validate=lambda value: (
-            not value.strip()
-            or (
-                all(ch.isalnum() or ch in "._-^" for ch in value.strip())
-                and len(value.strip()) <= 32
-            )
-        )
-        or "Please enter a valid ticker symbol, e.g. AAPL, 000404.SZ, 0700.HK.",
+        validate=validate_ticker,
     ).ask()
 
     if ticker is None:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
         raise typer.Exit(1)
 
-    return (ticker.strip() or "SPY").upper()
+    # 最终清洗多余空白和不可见字符
+    cleaned_ticker = "".join(ch for ch in ticker if ch.isprintable() and not ch.isspace())
+    return normalize_ticker_symbol(cleaned_ticker or "SPY")
 
 
 def get_analysis_date():
@@ -974,7 +988,30 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def run_analysis(checkpoint: bool = False):
+
+def _apply_data_vendor_override(config: dict, data_vendors: str = None) -> None:
+    if not data_vendors:
+        return
+    configured_vendors = ",".join(
+        vendor.strip() for vendor in data_vendors.split(",") if vendor.strip()
+    )
+    if not configured_vendors:
+        raise ValueError("No valid data vendor provided.")
+    config["data_vendors"] = {
+        **config.get("data_vendors", {}),
+        "core_stock_apis": configured_vendors,
+        "technical_indicators": configured_vendors,
+        "fundamental_data": configured_vendors,
+        "news_data": configured_vendors,
+    }
+
+
+def run_analysis(
+    checkpoint: bool = False,
+    data_vendors: str = None,
+    save_report: Optional[bool] = None,
+    display_report: Optional[bool] = None,
+):
     # First get all user selections
     selections = get_user_selections()
 
@@ -992,6 +1029,11 @@ def run_analysis(checkpoint: bool = False):
     config["anthropic_effort"] = selections.get("anthropic_effort")
     config["output_language"] = selections.get("output_language", "English")
     config["checkpoint_enabled"] = checkpoint
+    try:
+        _apply_data_vendor_override(config, data_vendors)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
 
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
@@ -1078,6 +1120,10 @@ def run_analysis(checkpoint: bool = False):
         message_buffer.add_message("System", f"Selected ticker: {selections['ticker']}")
         message_buffer.add_message("System", f"Detected asset type: {selections['asset_type']}")
         message_buffer.add_message(
+            "System",
+            f"Detected market/instrument: {selections['market_type']} / {selections['instrument_type']}",
+        )
+        message_buffer.add_message(
             "System", f"Analysis date: {selections['analysis_date']}"
         )
         message_buffer.add_message(
@@ -1103,6 +1149,8 @@ def run_analysis(checkpoint: bool = False):
             selections["ticker"],
             selections["analysis_date"],
             asset_type=selections["asset_type"],
+            instrument_type=selections["instrument_type"],
+            market_type=selections["market_type"],
         )
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)
@@ -1240,9 +1288,11 @@ def run_analysis(checkpoint: bool = False):
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
 
-    # Prompt to save report
-    save_choice = typer.prompt("Save report?", default="Y").strip().upper()
-    if save_choice in ("Y", "YES", ""):
+    should_save_report = save_report
+    if should_save_report is None:
+        save_choice = typer.prompt("Save report?", default="Y").strip().upper()
+        should_save_report = save_choice in ("Y", "YES", "")
+    if should_save_report:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
         save_path_str = typer.prompt(
@@ -1257,9 +1307,11 @@ def run_analysis(checkpoint: bool = False):
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
 
-    # Prompt to display full report
-    display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
-    if display_choice in ("Y", "YES", ""):
+    should_display_report = display_report
+    if should_display_report is None:
+        display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
+        should_display_report = display_choice in ("Y", "YES", "")
+    if should_display_report:
         display_complete_report(final_state)
 
 
@@ -1275,12 +1327,32 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    data_vendors: str = typer.Option(
+        None,
+        "--data-vendors",
+        help="Comma-separated data vendor fallback chain, e.g. akshare,yfinance.",
+    ),
+    save_report: Optional[bool] = typer.Option(
+        None,
+        "--save-report/--no-save-report",
+        help="Save the complete report without prompting, or disable report saving.",
+    ),
+    display_report: Optional[bool] = typer.Option(
+        None,
+        "--display-report/--no-display-report",
+        help="Display the complete report without prompting, or disable full report display.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint)
+    run_analysis(
+        checkpoint=checkpoint,
+        data_vendors=data_vendors,
+        save_report=save_report,
+        display_report=display_report,
+    )
 
 
 if __name__ == "__main__":
