@@ -1,4 +1,5 @@
 from tradingagents.agents.utils.agent_utils import (
+    build_verified_target_context,
     get_fundamentals_report_label,
     get_instrument_target_label,
     get_language_instruction,
@@ -18,8 +19,12 @@ def create_bull_researcher(llm):
         fundamentals_report = state["fundamentals_report"]
         target_label = get_instrument_target_label(state)
         fundamentals_label = get_fundamentals_report_label(state)
+        target_context = build_verified_target_context(state)
 
-        prompt = f"""You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        prompt = f"""Target identity:
+{target_context}
+
+You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
 Key points to focus on:
 - Growth Potential: Highlight upside drivers relevant to the instrument, such as company growth for stocks or benchmark/theme exposure and flows for listed funds.

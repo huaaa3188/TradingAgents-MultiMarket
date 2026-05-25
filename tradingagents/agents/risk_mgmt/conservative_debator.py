@@ -1,4 +1,5 @@
 from tradingagents.agents.utils.agent_utils import (
+    build_verified_target_context,
     get_fundamentals_report_label,
     get_language_instruction,
 )
@@ -20,8 +21,12 @@ def create_conservative_debator(llm):
         fundamentals_label = get_fundamentals_report_label(state)
 
         trader_decision = state["trader_investment_plan"]
+        target_context = build_verified_target_context(state)
 
-        prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
+        prompt = f"""Target identity:
+{target_context}
+
+As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
 
 {trader_decision}
 

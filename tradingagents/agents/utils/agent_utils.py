@@ -84,6 +84,17 @@ def build_instrument_context(
     )
 
 
+def build_verified_target_context(state) -> str:
+    """Build the shared target identity context from graph state."""
+    return build_instrument_context(
+        state.get("company_of_interest", ""),
+        asset_type=state.get("asset_type", "stock"),
+        instrument_type=state.get("instrument_type"),
+        market_type=state.get("market_type"),
+        company_display_name=state.get("company_display_name"),
+    )
+
+
 def get_instrument_target_label(state) -> str:
     instrument_type = state.get("instrument_type", "")
     if state.get("asset_type") == "crypto" or instrument_type == InstrumentType.CRYPTO.value:
