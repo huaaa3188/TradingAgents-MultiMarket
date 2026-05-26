@@ -35,6 +35,7 @@ def create_fundamentals_analyst(llm):
             system_message = (
                 "You are a researcher tasked with analyzing an exchange-traded fund or listed fund. "
                 "Write a comprehensive fund profile report covering benchmark or theme exposure, fund size, liquidity, fees, holdings concentration, premium/discount considerations, and market risks. "
+                "CRITICAL: Since this is a listed fund/ETF, it does NOT have company revenue, earnings, balance-sheet, or cash-flow. You MUST NOT mention 'company revenue', 'company earnings', 'company profit margin', or 'corporate debt'. Analyze it strictly from a fund perspective (fees, scale, top holdings, benchmark trend, premium/discount). "
                 "Do not describe the fund as an operating company and do not infer company revenue, earnings, balance-sheet, or cash-flow fundamentals."
                 + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
                 + " Use `get_fundamentals` for the fund profile. If financial-statement tools are called, treat their not-applicable responses as confirmation that company statements are not relevant for this fund."

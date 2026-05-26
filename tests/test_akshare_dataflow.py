@@ -524,3 +524,32 @@ def test_akshare_get_display_name_cached(monkeypatch, tmp_path):
     # 缓存测试：第二次调用股票应该直接从缓存返回
     assert akshare.get_ticker_display_name("600519") == "贵州茅台"
     assert len(fake.calls) == 2
+
+
+def test_akshare_disk_cache_disabled_by_config(tmp_path, monkeypatch):
+    from diskcache import Cache
+    from tradingagents.dataflows import akshare
+    from tradingagents.dataflows.config import set_config
+    import tradingagents.default_config as default_config
+
+    # 1. 实例化一个临时隔离的 Cache 并绑定
+    temp_cache = Cache(str(tmp_path / "test_disable_cache"))
+    monkeypatch.setattr(akshare, "cache", temp_cache)
+
+    # 2. Mock 底层 _load_ohlcv
+    load_count = 0
+    def mock_load_ohlcv(symbol, start, end):
+        nonlocal load_count
+        load_count += 1
+        return _ohlcv_frame()
+    monkeypatch.setattr(akshare, "_load_ohlcv", mock_load_ohlcv)
+
+    # 3. 开启缓存（默认）：调用一次，填充缓存
+    set_config({"enable_data_cache": True})
+    akshare.get_stock("600519", "2026-01-01", "2026-01-03")
+    assert load_count == 1
+
+    # 4. 关闭缓存：调用第二次，由于禁用了缓存，即使缓存有值，也应当穿透调用底层
+    set_config({"enable_data_cache": False})
+    akshare.get_stock("600519", "2026-01-01", "2026-01-03")
+    assert load_count == 2

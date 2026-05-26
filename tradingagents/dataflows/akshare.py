@@ -40,6 +40,9 @@ def akshare_disk_cache(expire=14400):  # 默认缓存 4 小时 (14400 秒)
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            if not get_config().get("enable_data_cache", True):
+                return func(*args, **kwargs)
+
             active_cache = _get_cache()
             if active_cache is None:
                 return func(*args, **kwargs)
@@ -89,7 +92,13 @@ def get_stock(
     try:
         data = _load_ohlcv(symbol, start_date, end_date)
         if data.empty:
-            return f"No AkShare data found for symbol '{symbol}' between {start_date} and {end_date}"
+            normalized = normalize_ticker_symbol(symbol)
+            return (
+                f"[Data Availability Notice] No AkShare data found for symbol '{normalized}' between {start_date} and {end_date}. "
+                "This might be because the requested date range consists entirely of non-trading days (weekends or public holidays), "
+                "or the market was closed, or the ticker is temporarily suspended. "
+                "If trading data is missing, check alternative vendors or rely on the latest available history."
+            )
 
         csv_string = data.to_csv(index=False)
         normalized = normalize_ticker_symbol(symbol)
