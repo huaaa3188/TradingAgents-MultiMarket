@@ -49,6 +49,7 @@ class AgentState(MessagesState):
     asset_type: Annotated[str, "Asset type under analysis such as stock or crypto"]
     instrument_type: Annotated[str, "Instrument type under analysis such as equity, fund, or crypto"]
     market_type: Annotated[str, "Market under analysis such as us, cn_a, hk, jp, or crypto"]
+    instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]
     trade_date: Annotated[str, "What date we are trading at"]
 
     sender: Annotated[str, "Agent that sent this message"]

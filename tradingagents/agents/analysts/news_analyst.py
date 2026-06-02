@@ -1,6 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
-    build_instrument_context,
+    get_instrument_context_from_state,
     get_instrument_target_label,
     get_global_news,
     get_language_instruction,
@@ -12,15 +12,8 @@ from tradingagents.dataflows.config import get_config
 def create_news_analyst(llm):
     def news_analyst_node(state):
         current_date = state["trade_date"]
-        asset_type = state.get("asset_type", "stock")
         asset_label = get_instrument_target_label(state)
-        instrument_context = build_instrument_context(
-            state["company_of_interest"],
-            asset_type,
-            state.get("instrument_type"),
-            state.get("market_type"),
-            state.get("company_display_name"),
-        )
+        instrument_context = get_instrument_context_from_state(state)
 
         tools = [
             get_news,

@@ -69,6 +69,14 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertIn("not as an operating company", context)
         self.assertIn("quoted in CNY", context)
 
+    def test_single_get_ticker_no_shadow(self):
+        # Regression: cli/main.py had a duplicate get_ticker with an empty
+        # questionary prompt (rendered as a bare "?") that shadowed the
+        # descriptive one in cli/utils. Keep a single canonical definition.
+        import cli.main
+        import cli.utils
+        self.assertIs(cli.main.get_ticker, cli.utils.get_ticker)
+
 
 if __name__ == "__main__":
     unittest.main()

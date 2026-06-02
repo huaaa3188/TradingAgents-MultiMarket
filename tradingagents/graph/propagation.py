@@ -28,8 +28,16 @@ class Propagator:
         instrument_type: str = None,
         market_type: str = None,
         past_context: str = "",
+        instrument_context: str = "",
     ) -> Dict[str, Any]:
-        """Create the initial state for the agent graph."""
+        """Create the initial state for the agent graph.
+
+        ``instrument_context`` is the deterministic ticker-identity string
+        resolved once at run start (see
+        ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
+        fall back to ticker-only context via
+        ``get_instrument_context_from_state``.
+        """
         resolved_instrument_type = instrument_type or detect_instrument_type(company_name).value
         resolved_market_type = market_type or detect_market_type(company_name).value
         resolved_display_name = company_name
@@ -44,6 +52,7 @@ class Propagator:
             "asset_type": asset_type,
             "instrument_type": resolved_instrument_type,
             "market_type": resolved_market_type,
+            "instrument_context": instrument_context,
             "trade_date": str(trade_date),
             "past_context": past_context,
             "investment_debate_state": InvestDebateState(

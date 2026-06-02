@@ -1,3 +1,8 @@
+import functools
+import logging
+from typing import Any, Mapping, Optional
+
+import yfinance as yf
 from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
@@ -19,6 +24,11 @@ from tradingagents.agents.utils.news_data_tools import (
     get_global_news
 )
 from tradingagents.dataflows.instruments import InstrumentType, MarketType
+from tradingagents.agents.utils.market_data_validation_tools import (
+    get_verified_market_snapshot
+)
+
+logger = logging.getLogger(__name__)
 
 
 def get_language_instruction() -> str:
@@ -37,24 +47,86 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
+def _clean_identity_value(value: Any) -> Optional[str]:
+    """Return a trimmed string, or None for empty / placeholder-ish values."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned.lower() in {"none", "n/a", "nan", "null"}:
+        return None
+    return cleaned
+
+
+@functools.lru_cache(maxsize=256)
+def resolve_instrument_identity(ticker: str) -> dict:
+    """Resolve deterministic identity metadata (company name, sector, …) for a ticker.
+
+    This exists to stop the pipeline from hallucinating a *different* company
+    when a chart pattern suggests a different industry than the real one
+    (#814): without a ground-truth name, the market analyst would pattern-match
+    the price action to a narrative and invent an identity that then cascaded
+    through every downstream agent.
+
+    Best-effort by design: if yfinance is unavailable, rate-limited, or doesn't
+    recognise the ticker, we return ``{}`` and the caller falls back to
+    ticker-only context rather than failing before analysis starts. Cached so
+    the lookup happens at most once per ticker per process.
+    """
+    try:
+        info = yf.Ticker(ticker.upper()).info or {}
+    except Exception as exc:  # noqa: BLE001 — fail open, never block the run
+        logger.debug("Could not resolve instrument identity for %s: %s", ticker, exc)
+        return {}
+
+    identity: dict[str, str] = {}
+    company_name = _clean_identity_value(info.get("longName")) or _clean_identity_value(
+        info.get("shortName")
+    )
+    if company_name:
+        identity["company_name"] = company_name
+    for source_key, target_key in (
+        ("sector", "sector"),
+        ("industry", "industry"),
+        ("exchange", "exchange"),
+        ("quoteType", "quote_type"),
+    ):
+        value = _clean_identity_value(info.get(source_key))
+        if value:
+            identity[target_key] = value
+    return identity
+
+
 def build_instrument_context(
     ticker: str,
     asset_type: str = "stock",
+    identity: Optional[Mapping[str, str]] = None,
     instrument_type: str = None,
     market_type: str = None,
     company_display_name: str = None,
 ) -> str:
-    """Describe the exact instrument so agents preserve exchange-qualified tickers."""
+    """Describe the exact instrument so agents preserve identity and ticker.
+
+    When ``identity`` is provided (resolved deterministically via
+    :func:`resolve_instrument_identity`), the company name and business
+    classification are injected so agents anchor to the real company rather
+    than pattern-matching the price chart to a wrong one (#814).
+    """
+    if identity is not None and not isinstance(identity, Mapping):
+        instrument_type = str(identity)
+        identity = None
+
     instrument_value = (instrument_type or "").lower()
     market_value = (market_type or "").lower()
+    is_crypto = asset_type == "crypto" or instrument_value == InstrumentType.CRYPTO.value
 
-    if asset_type == "crypto" or instrument_value == InstrumentType.CRYPTO.value:
+    if is_crypto:
         instrument_label = "asset"
         extra_hint = (
-            " Treat it as a crypto asset rather than a company, and do not assume company fundamentals are available."
+            " Treat it as a crypto asset rather than a company, and do not "
+            "assume company fundamentals are available."
         )
     elif instrument_value == InstrumentType.FUND.value:
-        instrument_label = "fund"
+        instrument_label = "listed fund"
         extra_hint = (
             " Treat it as an exchange-traded fund or listed fund, not as an operating company."
             " Focus on the tracked benchmark or theme, premium/discount, liquidity, fund size,"
@@ -74,25 +146,46 @@ def build_instrument_context(
 
     display_name_hint = ""
     if company_display_name and company_display_name != ticker:
-        display_name_hint = f" (Verified Name: **{company_display_name}**). You MUST strictly analyze this specific target and strictly refer to it by its verified name. Do NOT hallucinate any other names or indexes."
+        display_name_hint = (
+            f" (Verified Name: **{company_display_name}**). You MUST strictly "
+            "analyze this specific target and strictly refer to it by its verified "
+            "name. Do NOT hallucinate any other names or indexes."
+        )
 
-    return (
+    context = (
         f"The {instrument_label} to analyze is `{ticker}`{display_name_hint}. "
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.SH`, `.SZ`, `.TO`, `.L`, `.HK`, `.T`, `-USD`)."
-        + extra_hint
     )
+
+    details = []
+    if identity:
+        name = identity.get("company_name") or identity.get("name")
+        if name:
+            details.append(f"{'Name' if is_crypto else 'Company'}: {name}")
+        sector, industry = identity.get("sector"), identity.get("industry")
+        if sector and industry:
+            details.append(f"Business classification: {sector} / {industry}")
+        elif sector:
+            details.append(f"Sector: {sector}")
+        elif industry:
+            details.append(f"Industry: {industry}")
+        if identity.get("exchange"):
+            details.append(f"Exchange: {identity['exchange']}")
+
+    if details:
+        context += (
+            f" Resolved identity: {'; '.join(details)}. "
+            "Do not substitute a different company or ticker unless a tool "
+            "result explicitly disproves this resolved identity."
+        )
+
+    return context + extra_hint
 
 
 def build_verified_target_context(state) -> str:
     """Build the shared target identity context from graph state."""
-    return build_instrument_context(
-        state.get("company_of_interest", ""),
-        asset_type=state.get("asset_type", "stock"),
-        instrument_type=state.get("instrument_type"),
-        market_type=state.get("market_type"),
-        company_display_name=state.get("company_display_name"),
-    )
+    return get_instrument_context_from_state(state)
 
 
 def get_instrument_target_label(state) -> str:
@@ -112,17 +205,48 @@ def get_fundamentals_report_label(state) -> str:
         return "Fund profile report"
     return "Company fundamentals report"
 
+
+def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
+    """Return the instrument context for the current run.
+
+    Prefers the identity-resolved context computed once at run start and
+    stored on the state (see ``TradingAgentsGraph.resolve_instrument_context``).
+    Falls back to a ticker-only context — with no network lookup — when the
+    state was constructed without it (bare programmatic states, tests), so a
+    consumer is never forced to make a yfinance call mid-graph.
+    """
+    context = state.get("instrument_context")
+    if isinstance(context, str) and context.strip():
+        return context
+    return build_instrument_context(
+        str(state["company_of_interest"]),
+        state.get("asset_type", "stock"),
+        instrument_type=state.get("instrument_type"),
+        market_type=state.get("market_type"),
+        company_display_name=state.get("company_display_name"),
+    )
 def create_msg_delete():
     def delete_messages(state):
-        """Clear messages and add placeholder for Anthropic compatibility"""
-        messages = state["messages"]
+        """Clear messages and add a context-anchored placeholder.
 
-        # Remove all messages
+        The placeholder must not be a bare ``"Continue"``: some
+        OpenAI-compatible providers interpret that literally as the user task
+        and produce output about the word "continue" instead of analysing the
+        instrument (#888). Anchoring it to the resolved instrument context and
+        date keeps the next analyst on-task even if the provider treats the
+        placeholder as a standalone request.
+        """
+        messages = state["messages"]
         removal_operations = [RemoveMessage(id=m.id) for m in messages]
 
-        # Add a minimal placeholder message
-        placeholder = HumanMessage(content="Continue")
-
+        instrument_context = get_instrument_context_from_state(state)
+        trade_date = state.get("trade_date", "the requested date")
+        placeholder = HumanMessage(
+            content=(
+                f"Proceed with your assigned analysis for this workflow. "
+                f"{instrument_context} The analysis date is {trade_date}."
+            )
+        )
         return {"messages": removal_operations + [placeholder]}
 
     return delete_messages

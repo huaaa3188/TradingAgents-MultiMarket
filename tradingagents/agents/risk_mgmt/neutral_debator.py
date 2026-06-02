@@ -1,6 +1,7 @@
 from tradingagents.agents.utils.agent_utils import (
     build_verified_target_context,
     get_fundamentals_report_label,
+    get_instrument_context_from_state,
     get_language_instruction,
 )
 
@@ -19,6 +20,7 @@ def create_neutral_debator(llm):
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
         fundamentals_label = get_fundamentals_report_label(state)
+        instrument_context = get_instrument_context_from_state(state)
 
         trader_decision = state["trader_investment_plan"]
         target_context = build_verified_target_context(state)
@@ -32,6 +34,7 @@ As the Neutral Risk Analyst, your role is to provide a balanced perspective, wei
 
 Your task is to challenge both the Aggressive and Conservative Analysts, pointing out where each perspective may be overly optimistic or overly cautious. Use insights from the following data sources to support a moderate, sustainable strategy to adjust the trader's decision:
 
+{instrument_context}
 Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}

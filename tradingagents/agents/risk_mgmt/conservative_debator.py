@@ -1,6 +1,7 @@
 from tradingagents.agents.utils.agent_utils import (
     build_verified_target_context,
     get_fundamentals_report_label,
+    get_instrument_context_from_state,
     get_language_instruction,
 )
 
@@ -19,6 +20,7 @@ def create_conservative_debator(llm):
         news_report = state["news_report"]
         fundamentals_report = state["fundamentals_report"]
         fundamentals_label = get_fundamentals_report_label(state)
+        instrument_context = get_instrument_context_from_state(state)
 
         trader_decision = state["trader_investment_plan"]
         target_context = build_verified_target_context(state)
@@ -32,6 +34,7 @@ As the Conservative Risk Analyst, your primary objective is to protect assets, m
 
 Your task is to actively counter the arguments of the Aggressive and Neutral Analysts, highlighting where their views may overlook potential threats or fail to prioritize sustainability. Respond directly to their points, drawing from the following data sources to build a convincing case for a low-risk approach adjustment to the trader's decision:
 
+{instrument_context}
 Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}

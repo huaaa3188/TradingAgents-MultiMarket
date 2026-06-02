@@ -20,6 +20,7 @@ def create_bull_researcher(llm):
         target_label = get_instrument_target_label(state)
         fundamentals_label = get_fundamentals_report_label(state)
         target_context = build_verified_target_context(state)
+        instrument_context = target_context
 
         prompt = f"""Target identity:
 {target_context}
@@ -34,6 +35,7 @@ Key points to focus on:
 - Engagement: Present your argument in a conversational style, engaging directly with the bear analyst's points and debating effectively rather than just listing data.
 
 Resources available:
+{instrument_context}
 Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
