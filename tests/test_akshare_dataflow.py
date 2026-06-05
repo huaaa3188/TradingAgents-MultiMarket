@@ -19,6 +19,7 @@ def isolate_akshare_cache(monkeypatch, tmp_path):
     from diskcache import Cache
     temp_cache = Cache(str(tmp_path / "test_akshare_cache"))
     monkeypatch.setattr(akshare, "cache", temp_cache)
+    monkeypatch.setattr(akshare, "get_fund_profile_tables", lambda symbol, curr_date: [])
     yield
 
 
@@ -273,6 +274,37 @@ def test_fund_news_falls_back_to_recent_announcements_before_end_date(monkeypatc
     assert "更早年度报告" in result
 
 
+def test_news_date_filter_excludes_next_day_date_only_rows():
+    data = pd.DataFrame(
+        [
+            {"新闻标题": "窗口内", "发布时间": "2026-01-03"},
+            {"新闻标题": "次日", "发布时间": "2026-01-04"},
+        ]
+    )
+
+    result = akshare._filter_date_rows(data, "2026-01-01", "2026-01-03")
+
+    assert result["新闻标题"].tolist() == ["窗口内"]
+
+
+def test_fund_announcement_filter_excludes_next_day_date_only_rows():
+    data = pd.DataFrame(
+        [
+            {"公告标题": "窗口内公告", "公告日期": "2026-01-03"},
+            {"公告标题": "次日公告", "公告日期": "2026-01-04"},
+        ]
+    )
+
+    result, used_fallback = akshare._filter_fund_announcements(
+        data,
+        "2026-01-01",
+        "2026-01-03",
+    )
+
+    assert used_fallback is False
+    assert result["公告标题"].tolist() == ["窗口内公告"]
+
+
 def test_route_to_vendor_can_select_akshare(monkeypatch):
     fake = FakeAkShare()
     monkeypatch.setattr(akshare, "_ak", lambda: fake)
@@ -323,6 +355,27 @@ def test_route_to_vendor_falls_back_on_akshare_data_error_for_us_ticker(monkeypa
     assert route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-03") == (
         "fallback:AAPL:2026-01-01:2026-01-03"
     )
+
+
+def test_route_to_vendor_skips_akshare_for_us_ticker(monkeypatch):
+    calls = []
+
+    def akshare_stock(symbol, start_date, end_date):
+        calls.append(("akshare", symbol))
+        return "wrong-vendor"
+
+    def yfinance_stock(symbol, start_date, end_date):
+        calls.append(("yfinance", symbol))
+        return f"yfinance:{symbol}:{start_date}:{end_date}"
+
+    monkeypatch.setitem(route_to_vendor.__globals__["VENDOR_METHODS"]["get_stock_data"], "akshare", akshare_stock)
+    monkeypatch.setitem(route_to_vendor.__globals__["VENDOR_METHODS"]["get_stock_data"], "yfinance", yfinance_stock)
+    set_config({"tool_vendors": {"get_stock_data": "akshare,yfinance"}})
+
+    assert route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-03") == (
+        "yfinance:AAPL:2026-01-01:2026-01-03"
+    )
+    assert calls == [("yfinance", "AAPL")]
 
 
 def _ohlcv_frame():

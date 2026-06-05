@@ -13,6 +13,7 @@ from .instruments import (
     normalize_ticker_symbol,
     to_akshare_symbol,
 )
+from .tiantian_fund import get_fund_profile_tables
 
 
 import functools
@@ -398,15 +399,18 @@ def _get_fund_profile(ticker: str, curr_date: Optional[str]) -> str:
     pure_symbol = to_akshare_symbol(ticker)
     lines = [f"# Listed Fund Profile for {ticker}", f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
 
+    for table in _safe_tiantian_fund_tables(pure_symbol, curr_date):
+        lines.extend(_render_table_like(table.title, table.data, max_rows=table.max_rows))
+
     overview = _safe_call(lambda: ak.fund_overview_em(symbol=pure_symbol))
     fee = _safe_call(lambda: ak.fund_fee_em(symbol=pure_symbol, indicator="运作费用"))
     holdings = _safe_call(
         lambda: ak.fund_portfolio_hold_em(symbol=pure_symbol, date=_fund_holdings_year(curr_date))
     )
 
-    lines.extend(_render_table_like("Overview", overview))
-    lines.extend(_render_table_like("Fees", fee))
-    lines.extend(_render_table_like("Top Holdings", holdings, max_rows=10))
+    lines.extend(_render_table_like("AkShare Fund Overview", overview))
+    lines.extend(_render_table_like("AkShare Fund Fees", fee))
+    lines.extend(_render_table_like("AkShare Fund Top Holdings", holdings, max_rows=10))
     lines.append(
         "Fund analysis focus: benchmark/theme exposure, premium or discount, liquidity, fund size, fees, holdings concentration, and market risk."
     )
@@ -472,7 +476,8 @@ def _filter_date_rows(data: pd.DataFrame, start_date: str, end_date: str) -> pd.
     if not date_columns:
         return result
     parsed = pd.to_datetime(result[date_columns[0]], errors="coerce")
-    return result[(parsed >= pd.to_datetime(start_date)) & (parsed <= pd.to_datetime(end_date) + pd.DateOffset(days=1))]
+    end_exclusive = pd.to_datetime(end_date) + pd.DateOffset(days=1)
+    return result[(parsed >= pd.to_datetime(start_date)) & (parsed < end_exclusive)]
 
 
 def _filter_fund_announcements(
@@ -492,12 +497,12 @@ def _filter_fund_announcements(
         return result, False
 
     start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date) + pd.DateOffset(days=1)
-    in_window = result[(result["_parsed_date"] >= start_dt) & (result["_parsed_date"] <= end_dt)]
+    end_exclusive = pd.to_datetime(end_date) + pd.DateOffset(days=1)
+    in_window = result[(result["_parsed_date"] >= start_dt) & (result["_parsed_date"] < end_exclusive)]
     if not in_window.empty:
         return in_window.drop(columns=["_parsed_date"]), False
 
-    fallback = result[result["_parsed_date"] <= end_dt]
+    fallback = result[result["_parsed_date"] < end_exclusive]
     fallback = fallback.sort_values("_parsed_date", ascending=False).head(fallback_limit)
     return fallback.drop(columns=["_parsed_date"]), True
 
@@ -524,6 +529,13 @@ def _safe_call(func):
         return func()
     except Exception:
         return pd.DataFrame()
+
+
+def _safe_tiantian_fund_tables(symbol: str, curr_date: Optional[str]):
+    try:
+        return get_fund_profile_tables(symbol, curr_date)
+    except Exception:
+        return []
 
 
 def _first_present(row: pd.Series, columns: list[str], default: str = ""):

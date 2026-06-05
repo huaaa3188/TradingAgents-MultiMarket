@@ -95,6 +95,10 @@ MARKET_VENDOR_SUPPORT = {
     MarketType.CN_A: {"akshare"},
 }
 
+VENDOR_MARKET_SUPPORT = {
+    "akshare": {MarketType.CN_A},
+}
+
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
     # core_stock_apis
@@ -195,6 +199,10 @@ def route_to_vendor(method: str, *args, **kwargs):
             fallback_vendors = [vendor for vendor in fallback_vendors if vendor in compatible_vendors]
         else:
             fallback_vendors = []
+    elif market_type is not None:
+        fallback_vendors = [
+            vendor for vendor in fallback_vendors if _vendor_supports_market(vendor, market_type)
+        ]
 
     recoverable_errors = []
     last_no_data: NoMarketDataError | None = None
@@ -258,3 +266,8 @@ def _get_method_ticker(method: str, args) -> str:
     if method not in TICKER_METHODS or not args:
         return ""
     return str(args[0])
+
+
+def _vendor_supports_market(vendor: str, market_type: MarketType) -> bool:
+    supported_markets = VENDOR_MARKET_SUPPORT.get(vendor)
+    return supported_markets is None or market_type in supported_markets

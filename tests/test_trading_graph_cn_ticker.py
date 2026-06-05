@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import tradingagents.default_config as default_config
+from tradingagents.dataflows.config import get_config, set_config
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
@@ -38,6 +40,33 @@ def test_propagate_normalizes_cn_a_ticker_before_running_graph():
         "2026-01-03",
         asset_type="stock",
     )
+
+
+def test_propagate_defaults_cn_a_runtime_vendors_to_akshare_without_leaking_config():
+    set_config(default_config.DEFAULT_CONFIG.copy())
+
+    observed_configs = []
+    graph = object.__new__(TradingAgentsGraph)
+    graph.config = default_config.DEFAULT_CONFIG.copy()
+    graph._checkpointer_ctx = None
+    graph._resolve_pending_entries = MagicMock()
+
+    def fake_run_graph(company_name, trade_date, asset_type="stock"):
+        observed_configs.append(get_config())
+        return ("state", "decision")
+
+    graph._run_graph = fake_run_graph
+
+    result = TradingAgentsGraph.propagate(graph, "510300", "2026-01-03")
+
+    assert result == ("state", "decision")
+    assert observed_configs[0]["data_vendors"] == {
+        "core_stock_apis": "akshare",
+        "technical_indicators": "akshare",
+        "fundamental_data": "akshare",
+        "news_data": "akshare",
+    }
+    assert get_config()["data_vendors"] == default_config.DEFAULT_CONFIG["data_vendors"]
 
 
 def test_sentiment_analyst_builds_prompt_adaptively_for_fund():

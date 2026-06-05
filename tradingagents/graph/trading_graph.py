@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 import json
+from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Dict, Any, Tuple, List, Optional
 
@@ -18,14 +19,18 @@ from tradingagents.llm_clients import create_llm_client
 from tradingagents.agents import *
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.agents.utils.memory import TradingMemoryLog
-from tradingagents.dataflows.instruments import normalize_ticker_symbol
+from tradingagents.dataflows.instruments import (
+    MarketType,
+    detect_market_type,
+    normalize_ticker_symbol,
+)
 from tradingagents.dataflows.utils import safe_ticker_component
 from tradingagents.agents.utils.agent_states import (
     AgentState,
     InvestDebateState,
     RiskDebateState,
 )
-from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.config import get_config, set_config
 
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
@@ -222,6 +227,30 @@ class TradingAgentsGraph:
                 return benchmark
         return benchmark_map.get("", "SPY")
 
+    def _get_runtime_dataflow_config(self, ticker: str) -> Dict[str, Any]:
+        """Resolve per-run vendor defaults without mutating the instance config."""
+        if detect_market_type(ticker) != MarketType.CN_A:
+            return self.config
+
+        runtime_config = deepcopy(self.config)
+        runtime_data_vendors = runtime_config.setdefault("data_vendors", {})
+        default_data_vendors = DEFAULT_CONFIG.get("data_vendors", {})
+        updated = False
+
+        for category in (
+            "core_stock_apis",
+            "technical_indicators",
+            "fundamental_data",
+            "news_data",
+        ):
+            current_vendor = runtime_data_vendors.get(category)
+            default_vendor = default_data_vendors.get(category)
+            if current_vendor is None or current_vendor == default_vendor:
+                runtime_data_vendors[category] = "akshare"
+                updated = True
+
+        return runtime_config if updated else self.config
+
     def _fetch_returns(
         self, ticker: str, trade_date: str, holding_days: int = 5,
         benchmark: str = "SPY",
@@ -348,9 +377,13 @@ class TradingAgentsGraph:
             else:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
+        original_dataflow_config = get_config()
+        set_config(self._get_runtime_dataflow_config(company_name))
+
         try:
             return self._run_graph(company_name, trade_date, asset_type=asset_type)
         finally:
+            set_config(original_dataflow_config)
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
                 self._checkpointer_ctx = None
@@ -417,6 +450,9 @@ class TradingAgentsGraph:
         """Log the final state to a JSON file."""
         self.log_states_dict[str(trade_date)] = {
             "company_of_interest": final_state["company_of_interest"],
+            "company_display_name": final_state.get("company_display_name"),
+            "instrument_type": final_state.get("instrument_type"),
+            "market_type": final_state.get("market_type"),
             "trade_date": final_state["trade_date"],
             "market_report": final_state["market_report"],
             "sentiment_report": final_state["sentiment_report"],

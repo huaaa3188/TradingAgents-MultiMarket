@@ -8,6 +8,7 @@ Covers two systematic fixes:
 """
 
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -22,14 +23,12 @@ from tradingagents.dataflows.symbol_utils import NoMarketDataError
 @pytest.mark.unit
 class TestLoadOhlcvNoPoison(unittest.TestCase):
     def setUp(self):
-        self._tmp = os.path.join(os.path.dirname(__file__), "_tmp_cache")
-        os.makedirs(self._tmp, exist_ok=True)
+        self._tmp_ctx = tempfile.TemporaryDirectory()
+        self._tmp = self._tmp_ctx.name
         set_config({"data_cache_dir": self._tmp})
 
     def tearDown(self):
-        for f in os.listdir(self._tmp):
-            os.remove(os.path.join(self._tmp, f))
-        os.rmdir(self._tmp)
+        self._tmp_ctx.cleanup()
 
     def test_empty_download_raises_and_does_not_cache(self):
         empty = pd.DataFrame()

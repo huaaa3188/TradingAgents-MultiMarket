@@ -29,6 +29,7 @@ from tradingagents.graph.analyst_execution import (
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.dataflows.interface import VENDOR_LIST
 from cli.models import AnalystType
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
@@ -997,18 +998,33 @@ def format_tool_args(args, max_length=80) -> str:
 def _apply_data_vendor_override(config: dict, data_vendors: str = None) -> None:
     if not data_vendors:
         return
-    configured_vendors = ",".join(
+    configured_vendors = [
         vendor.strip() for vendor in data_vendors.split(",") if vendor.strip()
-    )
+    ]
     if not configured_vendors:
         raise ValueError("No valid data vendor provided.")
+    unknown_vendors = [vendor for vendor in configured_vendors if vendor not in VENDOR_LIST]
+    if unknown_vendors:
+        supported = ", ".join(VENDOR_LIST)
+        raise ValueError(
+            f"Unknown data vendor(s): {', '.join(unknown_vendors)}. Supported data vendors: {supported}."
+        )
+    configured_vendor_chain = ",".join(configured_vendors)
     config["data_vendors"] = {
         **config.get("data_vendors", {}),
-        "core_stock_apis": configured_vendors,
-        "technical_indicators": configured_vendors,
-        "fundamental_data": configured_vendors,
-        "news_data": configured_vendors,
+        "core_stock_apis": configured_vendor_chain,
+        "technical_indicators": configured_vendor_chain,
+        "fundamental_data": configured_vendor_chain,
+        "news_data": configured_vendor_chain,
     }
+
+
+def _resolve_data_vendor_override(selections: dict, data_vendors: str = None) -> str:
+    if data_vendors:
+        return data_vendors
+    if selections.get("market_type") == MarketType.CN_A.value:
+        return "akshare"
+    return data_vendors
 
 
 def run_analysis(
@@ -1034,8 +1050,9 @@ def run_analysis(
     config["anthropic_effort"] = selections.get("anthropic_effort")
     config["output_language"] = selections.get("output_language", "English")
     config["checkpoint_enabled"] = checkpoint
+    resolved_data_vendors = _resolve_data_vendor_override(selections, data_vendors)
     try:
-        _apply_data_vendor_override(config, data_vendors)
+        _apply_data_vendor_override(config, resolved_data_vendors)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -1129,6 +1146,11 @@ def run_analysis(
             "System",
             f"Detected market/instrument: {selections['market_type']} / {selections['instrument_type']}",
         )
+        if resolved_data_vendors:
+            message_buffer.add_message(
+                "System",
+                f"Data vendor chain: {resolved_data_vendors}",
+            )
         message_buffer.add_message(
             "System", f"Analysis date: {selections['analysis_date']}"
         )

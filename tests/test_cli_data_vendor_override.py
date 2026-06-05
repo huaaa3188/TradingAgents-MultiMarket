@@ -27,6 +27,31 @@ def test_apply_data_vendor_override_rejects_empty_value():
         cli_main._apply_data_vendor_override(config, " , ")
 
 
+def test_apply_data_vendor_override_rejects_unknown_vendor():
+    config = copy.deepcopy(DEFAULT_CONFIG)
+
+    with pytest.raises(ValueError, match="Unknown data vendor\\(s\\): akshre"):
+        cli_main._apply_data_vendor_override(config, "akshre,yfinance")
+
+
+def test_resolve_data_vendor_override_defaults_cn_a_to_akshare():
+    selections = {"market_type": "cn_a"}
+
+    assert cli_main._resolve_data_vendor_override(selections) == "akshare"
+
+
+def test_resolve_data_vendor_override_keeps_explicit_value():
+    selections = {"market_type": "cn_a"}
+
+    assert cli_main._resolve_data_vendor_override(selections, "akshare,yfinance") == "akshare,yfinance"
+
+
+def test_resolve_data_vendor_override_leaves_non_cn_a_default_unset():
+    selections = {"market_type": "us"}
+
+    assert cli_main._resolve_data_vendor_override(selections) is None
+
+
 def test_analyze_command_passes_data_vendor_override(monkeypatch):
     captured = {}
 

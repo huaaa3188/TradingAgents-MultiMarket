@@ -570,8 +570,9 @@ class TestDeferredReflection:
         mock_graph = MagicMock(spec=TradingAgentsGraph)
         mock_graph.config = {"benchmark_ticker": None,
                              "benchmark_map": DEFAULT_CONFIG["benchmark_map"]}
-        assert TradingAgentsGraph._resolve_benchmark(mock_graph, "600519.SS") == "000001.SS"
+        assert TradingAgentsGraph._resolve_benchmark(mock_graph, "600519.SH") == "000001.SS"
         assert TradingAgentsGraph._resolve_benchmark(mock_graph, "000001.SZ") == "399001.SZ"
+        assert TradingAgentsGraph._resolve_benchmark(mock_graph, "830833.BJ") == "000001.SS"
 
     def test_resolve_benchmark_us_ticker_defaults_to_spy(self):
         """US tickers (no dotted suffix) take the empty-suffix entry."""
@@ -831,6 +832,9 @@ class TestLegacyRemoval:
         fake_state = {
             "final_trade_decision": "Rating: Buy\nBuy NVDA.",
             "company_of_interest": "NVDA",
+            "company_display_name": "NVIDIA",
+            "instrument_type": "equity",
+            "market_type": "us",
             "trade_date": "2026-01-10",
             "market_report": "",
             "sentiment_report": "",
@@ -863,8 +867,15 @@ class TestLegacyRemoval:
         mock_graph._run_graph = functools.partial(
             TradingAgentsGraph._run_graph, mock_graph
         )
+        mock_graph._log_state = functools.partial(
+            TradingAgentsGraph._log_state, mock_graph
+        )
         TradingAgentsGraph.propagate(mock_graph, "NVDA", "2026-01-10")
         entries = mock_graph.memory_log.load_entries()
         assert len(entries) == 1
         assert entries[0]["ticker"] == "NVDA"
         assert entries[0]["pending"] is True
+        logged_state = mock_graph.log_states_dict["2026-01-10"]
+        assert logged_state["company_display_name"] == "NVIDIA"
+        assert logged_state["instrument_type"] == "equity"
+        assert logged_state["market_type"] == "us"
