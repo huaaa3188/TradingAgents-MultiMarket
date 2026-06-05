@@ -21,6 +21,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.instruments import (
     MarketType,
+    detect_instrument_type,
     detect_market_type,
     normalize_ticker_symbol,
 )
@@ -229,7 +230,7 @@ class TradingAgentsGraph:
 
     def _get_runtime_dataflow_config(self, ticker: str) -> Dict[str, Any]:
         """Resolve per-run vendor defaults without mutating the instance config."""
-        if detect_market_type(ticker) != MarketType.CN_A:
+        if detect_market_type(ticker) not in (MarketType.CN_A, MarketType.CN_FUND):
             return self.config
 
         runtime_config = deepcopy(self.config)
@@ -340,8 +341,22 @@ class TradingAgentsGraph:
         path and the CLI call this so the resolved identity reaches the whole
         graph regardless of entry point.
         """
+        instrument_type = detect_instrument_type(ticker)
+        market_type = detect_market_type(ticker)
         identity = resolve_instrument_identity(ticker)
-        return build_instrument_context(ticker, asset_type, identity)
+        display_name = None
+        if market_type in (MarketType.CN_A, MarketType.CN_FUND):
+            from tradingagents.dataflows.akshare import get_ticker_display_name
+
+            display_name = get_ticker_display_name(ticker)
+        return build_instrument_context(
+            ticker,
+            asset_type,
+            identity,
+            instrument_type=instrument_type.value,
+            market_type=market_type.value,
+            company_display_name=display_name,
+        )
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock"):
         """Run the trading agents graph for a company on a specific date.

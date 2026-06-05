@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
 )
 from tradingagents.dataflows.config import get_config
+from tradingagents.dataflows.instruments import MarketType
 
 
 def create_market_analyst(llm):
@@ -54,6 +55,13 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
             + get_language_instruction()
         )
+        if state.get("market_type") == MarketType.CN_FUND.value:
+            system_message += (
+                " This target is a China OTC fund. Treat get_stock_data output as daily fund NAV history, "
+                "not exchange-traded OHLCV. Analyze NAV trend, drawdown, volatility, momentum, and latest "
+                "available NAV date. Do not infer intraday trading volume, premium/discount, or exchange "
+                "liquidity unless a tool explicitly provides it."
+            )
 
         prompt = ChatPromptTemplate.from_messages(
             [

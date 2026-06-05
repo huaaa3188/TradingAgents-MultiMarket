@@ -15,7 +15,9 @@ from typing import Iterable, Optional
 import pandas as pd
 from stockstats import wrap
 
+from tradingagents.dataflows.instruments import MarketType, detect_market_type, normalize_ticker_symbol
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
+from tradingagents.dataflows.tiantian_fund import get_fund_nav_history
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
 DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
@@ -32,16 +34,22 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     look-ahead rows, but we re-apply the cutoff defensively — this is a
     verification path, so it must not trust its input to be pre-filtered.
     """
-    data = load_ohlcv(symbol, curr_date)
+    normalized = normalize_ticker_symbol(symbol)
+    if detect_market_type(normalized) == MarketType.CN_FUND:
+        data = get_fund_nav_history(normalized, None, curr_date)
+        no_data_label = "NAV"
+    else:
+        data = load_ohlcv(symbol, curr_date)
+        no_data_label = "OHLCV"
     if data is None or data.empty:
-        raise ValueError(f"No OHLCV data available for {symbol}.")
+        raise ValueError(f"No {no_data_label} data available for {symbol}.")
 
     df = data.copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
     df = df[df["Date"] <= pd.to_datetime(curr_date)].sort_values("Date")
     if df.empty:
-        raise ValueError(f"No OHLCV rows on or before {curr_date} for {symbol}.")
+        raise ValueError(f"No {no_data_label} rows on or before {curr_date} for {symbol}.")
     return df
 
 
@@ -69,7 +77,9 @@ def build_verified_market_snapshot(
     # `df` keeps the original capitalized OHLCV columns (Open/High/Low/Close/
     # Volume); stockstats `wrap()` lowercases columns and adds indicator
     # columns, so read raw prices from `df` and indicators from `stock_df`.
-    df = _verified_rows(symbol, curr_date)
+    normalized_symbol = normalize_ticker_symbol(symbol)
+    is_otc_fund = detect_market_type(normalized_symbol) == MarketType.CN_FUND
+    df = _verified_rows(normalized_symbol, curr_date)
     stock_df = wrap(df.copy())
 
     selected = tuple(indicators or DEFAULT_SNAPSHOT_INDICATORS)
@@ -87,37 +97,61 @@ def build_verified_market_snapshot(
     recent = df.tail(window)
 
     lines = [
-        f"## Verified market data snapshot for {symbol.upper()}",
+        (
+            f"## Verified fund NAV snapshot for {normalized_symbol.upper()}"
+            if is_otc_fund
+            else f"## Verified market data snapshot for {symbol.upper()}"
+        ),
         "",
         f"- Requested analysis date: {curr_date}",
-        f"- Latest trading row used: {latest_date}",
+        (
+            f"- Latest NAV row used: {latest_date}"
+            if is_otc_fund
+            else f"- Latest trading row used: {latest_date}"
+        ),
         "- Rows after the requested analysis date are excluded before verification.",
         "",
-        "### Latest verified OHLCV row",
+        "### Latest verified NAV row" if is_otc_fund else "### Latest verified OHLCV row",
         "",
         "| Field | Value |",
         "|---|---:|",
     ]
-    for field in ("Open", "High", "Low", "Close", "Volume"):
-        lines.append(f"| {field} | {_fmt(latest.get(field))} |")
+    if is_otc_fund:
+        lines.append(f"| NAV | {_fmt(latest.get('Close'))} |")
+        if "Pct Change" in latest:
+            lines.append(f"| NAV return (%) | {_fmt(latest.get('Pct Change'))} |")
+    else:
+        for field in ("Open", "High", "Low", "Close", "Volume"):
+            lines.append(f"| {field} | {_fmt(latest.get(field))} |")
 
     lines += ["", "### Verified technical indicators (latest row)", "",
               "| Indicator | Value |", "|---|---:|"]
     for name, value in indicator_values.items():
         lines.append(f"| {name} | {value} |")
 
-    lines += ["", f"### Recent verified closes (last {len(recent)} rows)", "",
-              "| Date | Close |", "|---|---:|"]
+    recent_title = "Recent verified NAVs" if is_otc_fund else "Recent verified closes"
+    value_title = "NAV" if is_otc_fund else "Close"
+    lines += ["", f"### {recent_title} (last {len(recent)} rows)", "",
+              f"| Date | {value_title} |", "|---|---:|"]
     for _, row in recent.iterrows():
         lines.append(f"| {_fmt(row['Date'])} | {_fmt(row.get('Close'))} |")
 
-    lines += [
-        "",
-        "Use this snapshot as the source of truth for exact OHLCV, price-level, "
-        "and indicator-value claims. If another tool output conflicts with it, "
-        "flag the discrepancy rather than inventing a reconciled number. Do not "
-        "claim historical validation, support/resistance bounces, or exact "
-        "percentage moves unless directly supported by tool output with concrete "
-        "dates and prices.",
-    ]
+    if is_otc_fund:
+        lines += [
+            "",
+            "Use this snapshot as the source of truth for exact NAV and indicator-value claims. "
+            "This OTC fund snapshot is based on daily fund NAV, not exchange-traded OHLCV or volume. "
+            "If another tool output conflicts with it, flag the discrepancy rather than inventing "
+            "a reconciled number.",
+        ]
+    else:
+        lines += [
+            "",
+            "Use this snapshot as the source of truth for exact OHLCV, price-level, "
+            "and indicator-value claims. If another tool output conflicts with it, "
+            "flag the discrepancy rather than inventing a reconciled number. Do not "
+            "claim historical validation, support/resistance bounces, or exact "
+            "percentage moves unless directly supported by tool output with concrete "
+            "dates and prices.",
+        ]
     return "\n".join(lines)

@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
 )
 from tradingagents.dataflows.config import get_config
+from tradingagents.dataflows.instruments import MarketType
 
 
 def create_news_analyst(llm):
@@ -22,9 +23,17 @@ def create_news_analyst(llm):
 
         instrument_type = state.get("instrument_type")
         if instrument_type == "fund":
+            if state.get("market_type") == MarketType.CN_FUND.value:
+                fund_label = "fund"
+                fund_events = "NAV updates, fund manager changes, fee changes, asset-allocation or holdings disclosures, subscription/redemption status, and QDII overseas-market or FX developments"
+                benchmark_phrase = "investment theme, asset class, or portfolio exposures"
+            else:
+                fund_label = "listed fund"
+                fund_events = "dividends, fund manager changes, share conversions, or trading suspensions"
+                benchmark_phrase = "tracked index or benchmark"
             system_message = (
-                f"You are a fund news researcher tasked with analyzing recent announcements and macroeconomic trends over the past week for this listed fund. "
-                f"Please write a comprehensive report covering key fund announcements (such as dividends, fund manager changes, share conversions, or trading suspensions) as well as broader macroeconomic or sector policies affecting the tracked index or benchmark. "
+                f"You are a fund news researcher tasked with analyzing recent announcements and macroeconomic trends over the past week for this {fund_label}. "
+                f"Please write a comprehensive report covering key fund announcements (such as {fund_events}) as well as broader macroeconomic or sector policies affecting the {benchmark_phrase}. "
                 f"Use the available tools: get_news(query, start_date, end_date) for {asset_label}-specific or targeted announcements/news searches, and get_global_news(curr_date, look_back_days, limit) for broader macroeconomic news. "
                 "Provide specific, actionable insights with supporting evidence to help traders make informed decisions. Do not describe the fund as an operating company and do not infer company product, revenue, or business-moat news."
                 + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""

@@ -93,10 +93,11 @@ TICKER_METHODS = {
 
 MARKET_VENDOR_SUPPORT = {
     MarketType.CN_A: {"akshare"},
+    MarketType.CN_FUND: {"akshare"},
 }
 
 VENDOR_MARKET_SUPPORT = {
-    "akshare": {MarketType.CN_A},
+    "akshare": {MarketType.CN_A, MarketType.CN_FUND},
 }
 
 # Mapping of methods to their vendor-specific implementations

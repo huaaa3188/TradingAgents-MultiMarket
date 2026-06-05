@@ -9,7 +9,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
 )
 from tradingagents.dataflows.config import get_config
-from tradingagents.dataflows.instruments import InstrumentType
+from tradingagents.dataflows.instruments import InstrumentType, MarketType
 
 
 def create_fundamentals_analyst(llm):
@@ -26,15 +26,26 @@ def create_fundamentals_analyst(llm):
         ]
 
         if instrument_type == InstrumentType.FUND.value:
-            system_message = (
-                "You are a researcher tasked with analyzing an exchange-traded fund or listed fund. "
-                "Write a comprehensive fund profile report covering benchmark or theme exposure, fund size, liquidity, fees, holdings concentration, premium/discount considerations, and market risks. "
-                "CRITICAL: Since this is a listed fund/ETF, it does NOT have company revenue, earnings, balance-sheet, or cash-flow. You MUST NOT mention 'company revenue', 'company earnings', 'company profit margin', or 'corporate debt'. Analyze it strictly from a fund perspective (fees, scale, top holdings, benchmark trend, premium/discount). "
-                "Do not describe the fund as an operating company and do not infer company revenue, earnings, balance-sheet, or cash-flow fundamentals."
-                + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
-                + " Use `get_fundamentals` for the fund profile. If financial-statement tools are called, treat their not-applicable responses as confirmation that company statements are not relevant for this fund."
-                + get_language_instruction(),
-            )
+            if state.get("market_type") == MarketType.CN_FUND.value:
+                system_message = (
+                    "You are a researcher tasked with analyzing a China OTC mutual fund or QDII fund share class. "
+                    "Write a comprehensive fund profile report covering NAV trend, fund category, share class, assets under management, fund manager, fees, asset allocation, holdings concentration, QDII/FX exposure where applicable, redemption/subscription constraints, and market risks. "
+                    "CRITICAL: Since this is a fund, it does NOT have company revenue, earnings, balance-sheet, or cash-flow. You MUST NOT mention 'company revenue', 'company earnings', 'company profit margin', or 'corporate debt'. Do not analyze exchange-traded volume or premium/discount unless a tool explicitly provides that data. "
+                    "Do not describe the fund as an operating company and do not infer company revenue, earnings, balance-sheet, or cash-flow fundamentals."
+                    + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
+                    + " Use `get_fundamentals` for the fund profile. If financial-statement tools are called, treat their not-applicable responses as confirmation that company statements are not relevant for this fund."
+                    + get_language_instruction(),
+                )
+            else:
+                system_message = (
+                    "You are a researcher tasked with analyzing an exchange-traded fund or listed fund. "
+                    "Write a comprehensive fund profile report covering benchmark or theme exposure, fund size, liquidity, fees, holdings concentration, premium/discount considerations, and market risks. "
+                    "CRITICAL: Since this is a listed fund/ETF, it does NOT have company revenue, earnings, balance-sheet, or cash-flow. You MUST NOT mention 'company revenue', 'company earnings', 'company profit margin', or 'corporate debt'. Analyze it strictly from a fund perspective (fees, scale, top holdings, benchmark trend, premium/discount). "
+                    "Do not describe the fund as an operating company and do not infer company revenue, earnings, balance-sheet, or cash-flow fundamentals."
+                    + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
+                    + " Use `get_fundamentals` for the fund profile. If financial-statement tools are called, treat their not-applicable responses as confirmation that company statements are not relevant for this fund."
+                    + get_language_instruction(),
+                )
         else:
             system_message = (
                 "You are a researcher tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Provide specific, actionable insights with supporting evidence to help traders make informed decisions."

@@ -46,6 +46,21 @@ def get_fund_profile_tables(
     return non_empty_tables
 
 
+def get_fund_nav_history(
+    symbol: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """Return daily fund NAV history as OHLCV-shaped rows for tool compatibility."""
+    code = _pure_fund_code(symbol)
+    script = _http_get_text(DETAIL_URL.format(symbol=code))
+    trend = _extract_js_var(script, "Data_netWorthTrend")
+    data = _nav_history_frame(trend, start_date, end_date)
+    if data.empty:
+        raise TiantianFundDataError(f"No Tiantian Fund NAV data returned for {code}")
+    return data
+
+
 def _http_get_text(url: str, params: Optional[dict[str, Any]] = None) -> str:
     try:
         response = requests.get(
@@ -201,6 +216,46 @@ def _latest_nav_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.Da
             }
         )
     return _latest_by_date(pd.DataFrame(rows), "日期", curr_date, limit=5)
+
+
+def _nav_history_frame(
+    trend: Any,
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> pd.DataFrame:
+    rows = []
+    for item in trend or []:
+        if not isinstance(item, dict) or "x" not in item:
+            continue
+        date = pd.to_datetime(item.get("x"), unit="ms", errors="coerce")
+        nav = pd.to_numeric(item.get("y"), errors="coerce")
+        if pd.isna(date) or pd.isna(nav):
+            continue
+        rows.append(
+            {
+                "Date": date.strftime("%Y-%m-%d"),
+                "Open": nav,
+                "High": nav,
+                "Low": nav,
+                "Close": nav,
+                "Volume": 0,
+                "Pct Change": pd.to_numeric(item.get("equityReturn"), errors="coerce"),
+                "Source": "天天基金/东方财富",
+            }
+        )
+
+    data = pd.DataFrame(rows)
+    if data.empty:
+        return data
+
+    data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
+    data = data.dropna(subset=["Date"]).sort_values("Date")
+    if start_date:
+        data = data[data["Date"] >= pd.to_datetime(start_date)]
+    if end_date:
+        data = data[data["Date"] <= pd.to_datetime(end_date)]
+    data["Date"] = data["Date"].dt.strftime("%Y-%m-%d")
+    return data
 
 
 def _scale_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.DataFrame:

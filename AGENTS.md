@@ -80,9 +80,10 @@
 - “Risk debate” -> `risk_debate_state`，由 `Aggressive/Conservative/Neutral Analyst` 轮转。
 - “Portfolio Manager” -> 当前代码里的最终裁决节点，产出 `final_trade_decision`。
 - “Signal” -> `SignalProcessor` 从长文本裁决中再抽取的 `BUY/SELL/HOLD` 单词。
-- `InstrumentType` -> `equity/fund/crypto/unknown`，其中 ETF/LOF/REIT 等场内基金统一走 `fund` 语义。
-- `MarketType` -> `us/cn_a/hk/jp/crypto/other`，A 股市场识别依赖 `tradingagents/dataflows/instruments.py`。
+- `InstrumentType` -> `equity/fund/crypto/unknown`，其中 ETF/LOF/REIT 等场内基金和明确识别的场外基金统一走 `fund` 语义。
+- `MarketType` -> `us/cn_a/cn_fund/hk/jp/crypto/other`，A 股与中国基金市场识别依赖 `tradingagents/dataflows/instruments.py`。
 - “Listed fund / 场内基金” -> ETF/LOF/REIT，按基金画像、费率、持仓、流动性、折溢价和跟踪标的分析，不按上市公司分析。
+- “China OTC fund / 场外基金” -> 天天基金/东方财富基金代码，如 `012920`，按 NAV、基金类型/份额、基金经理、规模、费率、资产配置、持仓、申赎约束、QDII/汇率或海外市场风险分析，不按上市公司或场内交易口径分析。
 - “Verified target / 黄金事实” -> `company_display_name` 加 `build_verified_target_context(...)`，用于减少 ticker 与中文简称幻觉。
 
 ### 容易混淆的概念
@@ -94,8 +95,8 @@
   - `MessageBuffer.current_report` 是从 state 快照归一化后的视图。
   - 真正执行依据仍是 LangGraph state。
 - `company_of_interest` 是工具调用和状态传播中的 ticker；`company_display_name` 是 AkShare 解析出的中文简称/展示名，不能互相替代。
-- ETF/场内基金不是上市公司；报告中不应套用公司营收、利润表、资产负债表或现金流表口径。
-- 默认 vendor 仍保持上游兼容口径；只有显式配置 `data_vendors.* = "akshare"` 或类似 `akshare,yfinance` fallback 时，A 股/场内基金才走 AkShare。
+- ETF/场内基金和场外基金都不是上市公司；报告中不应套用公司营收、利润表、资产负债表或现金流表口径。
+- 默认 vendor 仍保持上游兼容口径；Graph/CLI 对 `cn_a` 与 `cn_fund` 会自动切 AkShare/Tiantian 路径，直接调用 dataflow route 时仍需显式配置 `data_vendors.* = "akshare"` 或类似 `akshare,yfinance` fallback。
 
 ---
 

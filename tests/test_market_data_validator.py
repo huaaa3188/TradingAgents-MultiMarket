@@ -62,6 +62,31 @@ class TestVerifiedSnapshot:
         close_rows = [ln for ln in snap.splitlines() if ln.startswith("| 2026-")]
         assert 0 < len(close_rows) <= 30
 
+    def test_cn_otc_fund_snapshot_uses_nav_history(self, monkeypatch):
+        monkeypatch.setattr(
+            validator,
+            "load_ohlcv",
+            lambda s, d: (_ for _ in ()).throw(AssertionError("yfinance loader should not be called")),
+        )
+        monkeypatch.setattr(
+            validator,
+            "get_fund_nav_history",
+            lambda symbol, start, end: pd.DataFrame(
+                [
+                    {"Date": "2026-05-20", "Close": 4.5, "Open": 4.5, "High": 4.5, "Low": 4.5, "Volume": 0},
+                    {"Date": "2026-05-21", "Close": 4.6, "Open": 4.6, "High": 4.6, "Low": 4.6, "Volume": 0},
+                    {"Date": "2026-06-01", "Close": 9.9, "Open": 9.9, "High": 9.9, "Low": 9.9, "Volume": 0},
+                ]
+            ),
+        )
+
+        snap = validator.build_verified_market_snapshot("012920", "2026-05-21")
+
+        assert "Verified fund NAV snapshot for 012920" in snap
+        assert "Latest NAV row used: 2026-05-21" in snap
+        assert "| NAV | 4.60 |" in snap
+        assert "9.90" not in snap
+
 
 @pytest.mark.unit
 class TestTool:

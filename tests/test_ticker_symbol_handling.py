@@ -27,9 +27,14 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertEqual(normalize_ticker_symbol("161725"), "161725.SZ")
         self.assertEqual(normalize_ticker_symbol("508000"), "508000.SH")
 
+    def test_normalize_ticker_symbol_preserves_cn_otc_fund_codes(self):
+        self.assertEqual(normalize_ticker_symbol("012920"), "012920")
+        self.assertEqual(normalize_ticker_symbol("012922"), "012922")
+
     def test_detect_market_type(self):
         self.assertEqual(detect_market_type("600519"), MarketType.CN_A)
         self.assertEqual(detect_market_type("510300"), MarketType.CN_A)
+        self.assertEqual(detect_market_type("012920"), MarketType.CN_FUND)
         self.assertEqual(detect_market_type("AAPL"), MarketType.US)
         self.assertEqual(detect_market_type("0700.HK"), MarketType.HK)
         self.assertEqual(detect_market_type("BTC-USD"), MarketType.CRYPTO)
@@ -38,6 +43,7 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertEqual(detect_instrument_type("600519"), InstrumentType.EQUITY)
         self.assertEqual(detect_instrument_type("510300"), InstrumentType.FUND)
         self.assertEqual(detect_instrument_type("159915"), InstrumentType.FUND)
+        self.assertEqual(detect_instrument_type("012920"), InstrumentType.FUND)
         self.assertEqual(detect_instrument_type("AAPL"), InstrumentType.EQUITY)
         self.assertEqual(detect_instrument_type("BTC-USD"), InstrumentType.CRYPTO)
 
@@ -68,6 +74,16 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertIn("listed fund", context)
         self.assertIn("not as an operating company", context)
         self.assertIn("quoted in CNY", context)
+
+    def test_build_instrument_context_describes_cn_otc_fund(self):
+        context = build_instrument_context(
+            "012920",
+            instrument_type=InstrumentType.FUND.value,
+            market_type=MarketType.CN_FUND.value,
+        )
+        self.assertIn("OTC mutual fund", context)
+        self.assertIn("NAV trend", context)
+        self.assertIn("not as an exchange-traded listed fund", context)
 
     def test_single_get_ticker_no_shadow(self):
         # Regression: cli/main.py had a duplicate get_ticker with an empty

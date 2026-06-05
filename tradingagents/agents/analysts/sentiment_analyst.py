@@ -41,6 +41,7 @@ from tradingagents.agents.utils.structured import (
 )
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.dataflows.instruments import MarketType
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -78,6 +79,7 @@ def create_sentiment_analyst(llm):
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
             instrument_type=state.get("instrument_type"),
+            market_type=state.get("market_type"),
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -128,11 +130,20 @@ def _build_system_message(
     stocktwits_block: str,
     reddit_block: str,
     instrument_type: str = "equity",
+    market_type: str = "",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
-    instrument_label = "listed fund" if instrument_type == "fund" else "instrument"
+    is_otc_fund = instrument_type == "fund" and market_type == MarketType.CN_FUND.value
+    instrument_label = "fund" if is_otc_fund else "listed fund" if instrument_type == "fund" else "instrument"
 
-    if instrument_type == "fund":
+    if is_otc_fund:
+        best_practices = """1. **Read retail and news sentiment as context for the fund's investment theme and asset class.** Focus on optimism/pessimism regarding the underlying portfolio exposures rather than the fund as an operating company.
+2. **Look for divergences between fund NAV performance, fund flows/attention, and macro news.** Do not infer exchange-traded volume, premium/discount, or intraday liquidity unless a source explicitly provides it.
+3. **Weight discussions by engagement and theme.** Pay special attention to popular threads discussing the target sector, global market exposure, QDII timing, FX risk, fees, manager changes, holdings, or redemption/subscription constraints.
+4. **Identify recurring thematic narratives.** What driving themes or macro policies are retail and news talking about for this fund's holdings or asset class?
+5. **Absolutely avoid analyzing company revenue, earnings, competitive business moat, or corporate management.** This is a fund share class. Keep all insights focused on NAV, assets it holds, scale, fees, allocation, manager, and thematic risk.
+6. **Be honest about data limits.** If StockTwits or Reddit returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, flag this caveat explicitly."""
+    elif instrument_type == "fund":
         best_practices = """1. **Read the StockTwits and Reddit sentiment as a leading indicator of thematic or index-level sentiment.** Focus on the overall optimism/pessimism regarding the tracked index, asset class, or sector rather than the fund as an operating company.
 2. **Look for divergences in capital flows and pricing sentiment.** Note if there is retail excitement on forums but institutional discount/premium anomalies, or if there is panic while the underlying index fundamentals remain stable.
 3. **Weight discussions by engagement and theme.** Pay special attention to popular threads discussing the target thematic sector, tracking quality, fees, or liquidity of the fund.

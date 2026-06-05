@@ -13,7 +13,7 @@ from .instruments import (
     normalize_ticker_symbol,
     to_akshare_symbol,
 )
-from .tiantian_fund import get_fund_profile_tables
+from .tiantian_fund import get_fund_nav_history, get_fund_profile_tables
 
 
 import functools
@@ -103,7 +103,10 @@ def get_stock(
 
         csv_string = data.to_csv(index=False)
         normalized = normalize_ticker_symbol(symbol)
-        header = f"# AkShare data for {normalized} from {start_date} to {end_date}\n"
+        if detect_market_type(normalized) == MarketType.CN_FUND:
+            header = f"# Tiantian Fund NAV data for {normalized} from {start_date} to {end_date}\n"
+        else:
+            header = f"# AkShare data for {normalized} from {start_date} to {end_date}\n"
         header += f"# Total records: {len(data)}\n"
         header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         return header + csv_string
@@ -153,12 +156,18 @@ def get_indicator(
             rendered = "N/A" if pd.isna(value) else str(value)
             lines.append(f"{row['date']}: {rendered}")
 
-        return (
+        result = (
             f"## {indicator} values from {window_start} to {curr_date}:\n\n"
             + "\n".join(lines)
             + "\n\n"
             + supported[indicator]
         )
+        if detect_market_type(symbol) == MarketType.CN_FUND:
+            result += (
+                "\n\nFund NAV note: this indicator is computed from daily fund net asset value, "
+                "not exchange-traded OHLCV. Volume-derived indicators are not meaningful for OTC mutual funds."
+            )
+        return result
     except AkShareDataError:
         raise
     except Exception as e:
@@ -201,6 +210,7 @@ def get_news(ticker: str, start_date: str, end_date: str) -> str:
     symbol = to_akshare_symbol(ticker)
     try:
         if detect_instrument_type(normalized) == InstrumentType.FUND:
+            fund_label = _fund_label(normalized)
             report_announcements = _safe_call(lambda: ak.fund_announcement_report_em(symbol=symbol))
             dividend_announcements = _safe_call(lambda: ak.fund_announcement_dividend_em(symbol=symbol))
             personnel_announcements = _safe_call(lambda: ak.fund_announcement_personnel_em(symbol=symbol))
@@ -214,21 +224,20 @@ def get_news(ticker: str, start_date: str, end_date: str) -> str:
             )
             if data.empty:
                 return (
-                    f"No AkShare listed fund announcements found for {normalized} between "
-                    f"{start_date} and {end_date}. Use China market, benchmark/theme, liquidity, "
-                    "premium/discount, fees, and holdings context instead."
+                    f"No AkShare {fund_label} announcements found for {normalized} between "
+                    f"{start_date} and {end_date}. Use {_fund_context_hint(normalized)} instead."
                 )
             data, used_fallback = _filter_fund_announcements(data, start_date, end_date)
             if data.empty:
-                return f"No AkShare listed fund announcements found for {normalized} on or before {end_date}"
+                return f"No AkShare {fund_label} announcements found for {normalized} on or before {end_date}"
             rows = _render_news_rows(data)
             if used_fallback:
                 heading = (
-                    f"## {normalized} Recent Listed Fund Announcements before {end_date} "
+                    f"## {normalized} Recent {fund_label.title()} Announcements before {end_date} "
                     f"(none found from {start_date} to {end_date}):\n\n"
                 )
             else:
-                heading = f"## {normalized} Listed Fund Announcements, from {start_date} to {end_date}:\n\n"
+                heading = f"## {normalized} {fund_label.title()} Announcements, from {start_date} to {end_date}:\n\n"
             return heading + "\n".join(rows)
 
         data = ak.stock_news_em(symbol=symbol)
@@ -259,13 +268,17 @@ def get_global_news(curr_date: str, look_back_days: Optional[int] = None, limit:
 
 def get_insider_transactions(ticker: str) -> str:
     if detect_instrument_type(ticker) == InstrumentType.FUND:
-        return f"Insider transaction data is not applicable to listed fund {normalize_ticker_symbol(ticker)}."
+        normalized = normalize_ticker_symbol(ticker)
+        return f"Insider transaction data is not applicable to {_fund_label(normalized)} {normalized}."
     return f"AkShare insider transaction data is not available in a stable MVP format for {normalize_ticker_symbol(ticker)}."
 
 
 def _load_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
-    ak = _ak()
     normalized = normalize_ticker_symbol(symbol)
+    if detect_market_type(normalized) == MarketType.CN_FUND:
+        return _normalize_ohlcv(get_fund_nav_history(normalized, start_date, end_date), start_date, end_date)
+
+    ak = _ak()
     pure_symbol = to_akshare_symbol(normalized)
     start = _compact_date(start_date)
     end = _compact_date(end_date)
@@ -395,13 +408,24 @@ def _normalize_ohlcv(data: pd.DataFrame, start_date: str, end_date: str) -> pd.D
 
 
 def _get_fund_profile(ticker: str, curr_date: Optional[str]) -> str:
-    ak = _ak()
     pure_symbol = to_akshare_symbol(ticker)
-    lines = [f"# Listed Fund Profile for {ticker}", f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
+    is_otc_fund = detect_market_type(ticker) == MarketType.CN_FUND
+    title = "China OTC Fund Profile" if is_otc_fund else "Listed Fund Profile"
+    lines = [f"# {title} for {ticker}", f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
 
-    for table in _safe_tiantian_fund_tables(pure_symbol, curr_date):
+    tiantian_tables = _safe_tiantian_fund_tables(pure_symbol, curr_date)
+    for table in tiantian_tables:
         lines.extend(_render_table_like(table.title, table.data, max_rows=table.max_rows))
 
+    if is_otc_fund:
+        if not tiantian_tables:
+            lines.append(f"No Tiantian Fund profile data found for {pure_symbol}.")
+        lines.append(
+            "Fund analysis focus: NAV trend, fund category/share class, fund manager, assets under management, fees, asset allocation, holdings concentration, QDII/FX risk where applicable, and redemption/subscription constraints. Do not use listed-company financial statement semantics."
+        )
+        return "\n".join(lines)
+
+    ak = _ak()
     overview = _safe_call(lambda: ak.fund_overview_em(symbol=pure_symbol))
     fee = _safe_call(lambda: ak.fund_fee_em(symbol=pure_symbol, indicator="运作费用"))
     holdings = _safe_call(
@@ -453,10 +477,21 @@ def _financial_statement(ticker: str, statement: str, freq: str, curr_date: Opti
 
 
 def _fund_statement_not_applicable(ticker: str, statement_name: str) -> str:
+    normalized = normalize_ticker_symbol(ticker)
     return (
-        f"{statement_name.title()} is not applicable to listed fund {normalize_ticker_symbol(ticker)}. "
-        "Use fund overview, fees, holdings, liquidity, premium/discount, and benchmark exposure instead."
+        f"{statement_name.title()} is not applicable to {_fund_label(normalized)} {normalized}. "
+        "Use fund overview, fees, holdings, NAV trend, asset allocation, liquidity or redemption terms, and benchmark/theme exposure instead."
     )
+
+
+def _fund_label(ticker: str) -> str:
+    return "OTC fund" if detect_market_type(ticker) == MarketType.CN_FUND else "listed fund"
+
+
+def _fund_context_hint(ticker: str) -> str:
+    if detect_market_type(ticker) == MarketType.CN_FUND:
+        return "NAV trend, fund category, fees, asset allocation, holdings, fund manager, QDII/FX exposure, and subscription/redemption context"
+    return "China market, benchmark/theme, liquidity, premium/discount, fees, and holdings context"
 
 
 def _filter_statement_by_date(data: Optional[pd.DataFrame], curr_date: Optional[str]) -> pd.DataFrame:
@@ -594,9 +629,12 @@ def _indicator_descriptions() -> dict[str, str]:
 
 
 def get_ticker_display_name(ticker: str) -> str:
-    """Get verified Chinese display name (abbreviation or full name) for A-share / listed Fund via AkShare."""
+    """Get verified Chinese display name (abbreviation or full name) for China instruments."""
     normalized = normalize_ticker_symbol(ticker)
-    if detect_market_type(normalized) != MarketType.CN_A:
+    market_type = detect_market_type(normalized)
+    if market_type == MarketType.CN_FUND:
+        return _get_cn_fund_display_name(ticker, normalized)
+    if market_type != MarketType.CN_A:
         return ticker
     return _get_cn_a_ticker_display_name(ticker, normalized)
 
@@ -625,4 +663,16 @@ def _get_cn_a_ticker_display_name(ticker: str, normalized: str) -> str:
                         return str(row.get("value"))
         except Exception:
             pass
+    return ticker
+
+
+@akshare_disk_cache(expire=86400 * 30)
+def _get_cn_fund_display_name(ticker: str, normalized: str) -> str:
+    code = to_akshare_symbol(normalized)
+    for table in _safe_tiantian_fund_tables(code, None):
+        if table.title != "Tiantian Fund Overview":
+            continue
+        for _, row in table.data.iterrows():
+            if row.get("项目") == "基金简称" and row.get("内容"):
+                return str(row.get("内容"))
     return ticker

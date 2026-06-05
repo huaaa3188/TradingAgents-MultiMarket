@@ -41,7 +41,7 @@ class Propagator:
         resolved_instrument_type = instrument_type or detect_instrument_type(company_name).value
         resolved_market_type = market_type or detect_market_type(company_name).value
         resolved_display_name = company_name
-        if resolved_market_type == MarketType.CN_A.value:
+        if resolved_market_type in (MarketType.CN_A.value, MarketType.CN_FUND.value):
             from tradingagents.dataflows.akshare import get_ticker_display_name
 
             resolved_display_name = get_ticker_display_name(company_name)

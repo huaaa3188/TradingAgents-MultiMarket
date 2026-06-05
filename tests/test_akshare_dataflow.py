@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 import tradingagents.default_config as default_config
-from tradingagents.dataflows import akshare
+from tradingagents.dataflows import akshare, tiantian_fund
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.interface import route_to_vendor
 
@@ -193,6 +193,27 @@ def test_get_indicator_uses_normalized_ohlcv(monkeypatch):
     assert "RSI:" in result
 
 
+def test_get_stock_routes_cn_otc_fund_nav(monkeypatch):
+    monkeypatch.setattr(akshare, "_ak", lambda: (_ for _ in ()).throw(AssertionError("_ak should not be called")))
+    monkeypatch.setattr(akshare, "get_fund_nav_history", lambda symbol, start, end: _nav_frame())
+
+    result = akshare.get_stock("012920", "2026-01-01", "2026-01-03")
+
+    assert "Tiantian Fund NAV data for 012920" in result
+    assert "Date,Open,High,Low,Close,Volume" in result
+    assert "2026-01-03" in result
+
+
+def test_get_indicator_uses_cn_otc_fund_nav(monkeypatch):
+    monkeypatch.setattr(akshare, "get_fund_nav_history", lambda symbol, start, end: _nav_frame())
+
+    result = akshare.get_indicator("012920", "rsi", "2026-01-03", 2)
+
+    assert "## rsi values" in result
+    assert "Fund NAV note" in result
+    assert "RSI:" in result
+
+
 def test_get_fundamentals_returns_fund_profile(monkeypatch):
     fake = FakeAkShare()
     monkeypatch.setattr(akshare, "_ak", lambda: fake)
@@ -206,10 +227,34 @@ def test_get_fundamentals_returns_fund_profile(monkeypatch):
     assert ("fund_portfolio_hold_em", {"symbol": "510300", "date": "2026"}) in fake.calls
 
 
+def test_get_fundamentals_returns_cn_otc_fund_profile(monkeypatch):
+    monkeypatch.setattr(akshare, "_ak", lambda: (_ for _ in ()).throw(AssertionError("_ak should not be called")))
+    monkeypatch.setattr(
+        akshare,
+        "get_fund_profile_tables",
+        lambda symbol, curr_date: [
+            tiantian_fund.TiantianTable(
+                "Tiantian Fund Overview",
+                pd.DataFrame(
+                    [{"项目": "基金简称", "内容": "易方达全球成长精选混合(QDII)人民币A", "来源": "天天基金/东方财富"}]
+                ),
+            )
+        ],
+    )
+
+    result = akshare.get_fundamentals("012920", "2026-06-04")
+
+    assert "China OTC Fund Profile for 012920" in result
+    assert "易方达全球成长精选混合(QDII)人民币A" in result
+    assert "NAV trend" in result
+    assert "AkShare Fund Overview" not in result
+
+
 def test_fund_financial_statements_are_not_applicable():
     assert "not applicable to listed fund 510300.SH" in akshare.get_balance_sheet("510300")
     assert "not applicable to listed fund 510300.SH" in akshare.get_cashflow("510300")
     assert "not applicable to listed fund 510300.SH" in akshare.get_income_statement("510300")
+    assert "not applicable to OTC fund 012920" in akshare.get_balance_sheet("012920")
 
 
 def test_equity_financial_statements_use_prefixed_akshare_symbol(monkeypatch):
@@ -326,6 +371,16 @@ def test_route_to_vendor_requires_explicit_akshare_for_cn_a(monkeypatch):
         route_to_vendor("get_stock_data", "600519.SH", "2026-01-01", "2026-01-03")
 
 
+def test_route_to_vendor_requires_explicit_akshare_for_cn_otc_fund(monkeypatch):
+    def fallback_stock(symbol, start_date, end_date):
+        return f"fallback:{symbol}:{start_date}:{end_date}"
+
+    monkeypatch.setitem(route_to_vendor.__globals__["VENDOR_METHODS"]["get_stock_data"], "yfinance", fallback_stock)
+
+    with pytest.raises(RuntimeError, match="cn_fund ticker '012920'. Supported vendor\\(s\\): akshare"):
+        route_to_vendor("get_stock_data", "012920", "2026-01-01", "2026-01-03")
+
+
 def test_route_to_vendor_does_not_fall_back_to_yfinance_for_cn_a(monkeypatch):
     def fail_stock(symbol, start_date, end_date):
         raise akshare.AkShareDataError("rate limited")
@@ -384,6 +439,16 @@ def _ohlcv_frame():
             {"日期": "2026-01-01", "开盘": 10, "最高": 11, "最低": 9, "收盘": 10.5, "成交量": 1000},
             {"日期": "2026-01-02", "开盘": 10.5, "最高": 12, "最低": 10, "收盘": 11.5, "成交量": 1200},
             {"日期": "2026-01-03", "开盘": 11.5, "最高": 13, "最低": 11, "收盘": 12.5, "成交量": 1300},
+        ]
+    )
+
+
+def _nav_frame():
+    return pd.DataFrame(
+        [
+            {"Date": "2026-01-01", "Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0, "Volume": 0},
+            {"Date": "2026-01-02", "Open": 1.1, "High": 1.1, "Low": 1.1, "Close": 1.1, "Volume": 0},
+            {"Date": "2026-01-03", "Open": 1.2, "High": 1.2, "Low": 1.2, "Close": 1.2, "Volume": 0},
         ]
     )
 

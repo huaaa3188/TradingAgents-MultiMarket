@@ -90,6 +90,21 @@ def test_tiantian_fund_profile_keeps_detail_when_holdings_endpoint_fails(monkeyp
     assert "Tiantian Fund Top Holdings" not in by_title
 
 
+def test_tiantian_fund_nav_history_returns_ohlcv_shape(monkeypatch):
+    def fake_get(url, params=None, **kwargs):
+        return FakeResponse(_detail_script())
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    data = tiantian_fund.get_fund_nav_history("012920", "2026-05-21", "2026-05-22")
+
+    assert data["Date"].tolist() == ["2026-05-21", "2026-05-22"]
+    assert data["Close"].tolist() == [3.22, 3.24]
+    assert data["Open"].tolist() == [3.22, 3.24]
+    assert data["Volume"].tolist() == [0, 0]
+    assert data["Pct Change"].tolist() == [0.2, 0.3]
+
+
 def test_akshare_fund_profile_includes_tiantian_enrichment(monkeypatch):
     fake = FakeAkShare()
     monkeypatch.setattr(akshare, "_ak", lambda: fake)

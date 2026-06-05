@@ -126,13 +126,24 @@ def build_instrument_context(
             "assume company fundamentals are available."
         )
     elif instrument_value == InstrumentType.FUND.value:
-        instrument_label = "listed fund"
-        extra_hint = (
-            " Treat it as an exchange-traded fund or listed fund, not as an operating company."
-            " Focus on the tracked benchmark or theme, premium/discount, liquidity, fund size,"
-            " fees, holdings, and market risk; do not infer company revenue, earnings,"
-            " balance-sheet, or cash-flow fundamentals."
-        )
+        if market_value == MarketType.CN_FUND.value:
+            instrument_label = "fund"
+            extra_hint = (
+                " Treat it as an OTC mutual fund or QDII fund share class, not as an operating company"
+                " and not as an exchange-traded listed fund. Focus on NAV trend, fund category,"
+                " manager, assets under management, fees, asset allocation, holdings concentration,"
+                " redemption/subscription constraints, QDII/FX exposure where applicable, and market risk;"
+                " do not infer company revenue, earnings, balance-sheet, cash-flow fundamentals,"
+                " exchange-traded volume, or premium/discount unless a tool explicitly provides it."
+            )
+        else:
+            instrument_label = "listed fund"
+            extra_hint = (
+                " Treat it as an exchange-traded fund or listed fund, not as an operating company."
+                " Focus on the tracked benchmark or theme, premium/discount, liquidity, fund size,"
+                " fees, holdings, and market risk; do not infer company revenue, earnings,"
+                " balance-sheet, or cash-flow fundamentals."
+            )
     else:
         instrument_label = "instrument"
         extra_hint = ""
@@ -142,6 +153,12 @@ def build_instrument_context(
             " This is a mainland China listed instrument quoted in CNY; account for A-share"
             " trading sessions, price-limit rules, settlement conventions, holidays, and"
             " China-specific disclosure and financial reporting cadence."
+        )
+    elif market_value == MarketType.CN_FUND.value:
+        extra_hint += (
+            " This is a mainland China OTC fund code quoted by NAV in CNY unless the share class"
+            " states otherwise; account for fund NAV publication cadence, China fund disclosure"
+            " cadence, holiday effects, and QDII overseas-market timing when relevant."
         )
 
     display_name_hint = ""
@@ -193,6 +210,8 @@ def get_instrument_target_label(state) -> str:
     if state.get("asset_type") == "crypto" or instrument_type == InstrumentType.CRYPTO.value:
         return "asset"
     if instrument_type == InstrumentType.FUND.value:
+        if state.get("market_type") == MarketType.CN_FUND.value:
+            return "fund"
         return "listed fund"
     return "stock"
 

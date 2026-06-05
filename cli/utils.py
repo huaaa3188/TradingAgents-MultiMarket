@@ -19,7 +19,7 @@ from tradingagents.llm_clients.model_catalog import get_model_options
 
 console = Console()
 
-TICKER_INPUT_EXAMPLES = "SPY, CNC.TO, 7203.T, 0700.HK, 600519, 510300, BTC-USD"
+TICKER_INPUT_EXAMPLES = "SPY, CNC.TO, 7203.T, 0700.HK, 600519, 510300, 012920, BTC-USD"
 
 ANALYST_ORDER = [
     ("Market Analyst", AnalystType.MARKET),

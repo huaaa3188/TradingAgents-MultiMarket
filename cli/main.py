@@ -507,7 +507,7 @@ def get_user_selections():
     console.print(
         create_question_box(
             "Step 1: Ticker Symbol",
-            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK, 600519, 510300)",
+            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK, 600519, 510300, 012920)",
             "SPY",
         )
     )
@@ -1022,7 +1022,7 @@ def _apply_data_vendor_override(config: dict, data_vendors: str = None) -> None:
 def _resolve_data_vendor_override(selections: dict, data_vendors: str = None) -> str:
     if data_vendors:
         return data_vendors
-    if selections.get("market_type") == MarketType.CN_A.value:
+    if selections.get("market_type") in (MarketType.CN_A.value, MarketType.CN_FUND.value):
         return "akshare"
     return data_vendors
 
