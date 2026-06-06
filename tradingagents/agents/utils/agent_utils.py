@@ -47,6 +47,15 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
+def is_chinese_output_language(lang: str = None) -> bool:
+    if lang is None:
+        from tradingagents.dataflows.config import get_config
+
+        lang = get_config().get("output_language", "English")
+    normalized = str(lang).strip().lower()
+    return normalized in {"chinese", "zh", "zh-cn", "cn", "中文", "简体中文", "汉语"}
+
+
 def _clean_identity_value(value: Any) -> Optional[str]:
     """Return a trimmed string, or None for empty / placeholder-ish values."""
     if not isinstance(value, str):
@@ -148,18 +157,7 @@ def build_instrument_context(
         instrument_label = "instrument"
         extra_hint = ""
 
-    if market_value == MarketType.CN_A.value:
-        extra_hint += (
-            " This is a mainland China listed instrument quoted in CNY; account for A-share"
-            " trading sessions, price-limit rules, settlement conventions, holidays, and"
-            " China-specific disclosure and financial reporting cadence."
-        )
-    elif market_value == MarketType.CN_FUND.value:
-        extra_hint += (
-            " This is a mainland China OTC fund code quoted by NAV in CNY unless the share class"
-            " states otherwise; account for fund NAV publication cadence, China fund disclosure"
-            " cadence, holiday effects, and QDII overseas-market timing when relevant."
-        )
+    extra_hint += build_market_rules_context(instrument_value, market_value)
 
     display_name_hint = ""
     if company_display_name and company_display_name != ticker:
@@ -198,6 +196,40 @@ def build_instrument_context(
         )
 
     return context + extra_hint
+
+
+def build_market_rules_context(instrument_type: str = "", market_type: str = "") -> str:
+    """Return deterministic market-rule context for locally supported China markets."""
+    instrument_value = (instrument_type or "").lower()
+    market_value = (market_type or "").lower()
+
+    if market_value == MarketType.CN_A.value:
+        if instrument_value == InstrumentType.FUND.value:
+            return (
+                " Market rules context: this is a mainland China listed fund quoted in CNY. "
+                "Use exchange-traded listed-fund mechanics: exchange trading calendar, midday break, "
+                "T+1-style settlement constraints, exchange holidays, possible trading halts, "
+                "secondary-market liquidity, tracking error, fees, and premium/discount when provided. "
+                "Do not apply listed-company revenue or financial-statement semantics."
+            )
+        return (
+            " Market rules context: this is a mainland China A-share equity quoted in CNY. "
+            "Account for A-share trading sessions with a midday break, T+1-style settlement constraints, "
+            "exchange holidays, board-specific daily price-limit rules, possible ST/suspension status, "
+            "and China-specific disclosure and financial-reporting cadence. Do not assume US-style "
+            "continuous trading, same-day round trips, or unlimited intraday price movement."
+        )
+
+    if market_value == MarketType.CN_FUND.value:
+        return (
+            " Market rules context: this is a mainland China OTC fund code quoted by daily NAV in CNY "
+            "unless the share class states otherwise. Use fund NAV publication cadence, subscription "
+            "and redemption status, fund disclosure cadence, holiday effects, and QDII overseas-market "
+            "and FX timing where relevant. Do not infer exchange-traded volume, intraday liquidity, "
+            "or premium/discount for this OTC mutual fund unless a tool explicitly provides it."
+        )
+
+    return ""
 
 
 def build_verified_target_context(state) -> str:

@@ -173,16 +173,17 @@ You will see a screen where you can select your desired tickers, analysis date, 
 
 ### Markets and tickers
 
-TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. It also supports mainland China A-share equities and listed funds through AkShare, with Tiantian Fund / Eastmoney enrichment for listed-fund fundamentals. Company identity and the alpha benchmark resolve automatically per market.
+TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. It also supports mainland China A-share equities, listed funds, and China OTC fund codes through AkShare, with Tiantian Fund / Eastmoney enrichment for fund fundamentals. Company identity and the alpha benchmark resolve automatically per market.
 
 - US: `AAPL`, `SPY`
 - Hong Kong: `0700.HK` · Tokyo: `7203.T` · London: `AZN.L`
 - India: `RELIANCE.NS`, `.BO` · Canada: `.TO` · Australia: `.AX`
 - China A-shares: Shanghai `.SH`, Shenzhen `.SZ`, Beijing `.BJ`; bare six-digit A-share codes are normalized automatically, for example `600519` -> `600519.SH`
 - China listed funds / ETFs / LOFs / REITs: bare six-digit fund codes are normalized automatically, for example `510300` -> `510300.SH`, `159915` -> `159915.SZ`
+- China OTC funds: six-digit Tiantian Fund / Eastmoney codes such as `012920` are preserved as fund codes and analyzed using daily NAV, fund profile, manager, fees, allocation, holdings, subscription/redemption, and QDII/FX timing where applicable
 - Crypto: `BTC-USD`, `ETH-USD`
 
-For mainland China tickers, the CLI and Python entry point default the data vendor chain to `akshare` when the run has not explicitly configured another vendor. AkShare supplies A-share and listed-fund OHLCV, technical indicators, announcements, and fallback fund data; listed-fund fundamentals are additionally enriched from Tiantian Fund / Eastmoney with NAV trend, returns, scale, asset allocation, holder structure, manager, and top-holding tables, filtered to the analysis date.
+For mainland China tickers, the CLI and Python entry point default the data vendor chain to `akshare` when the run has not explicitly configured another vendor. AkShare supplies A-share and listed-fund OHLCV, technical indicators, announcements, China macro/policy news, and fallback fund data. Listed-fund and OTC-fund fundamentals are additionally enriched from Tiantian Fund / Eastmoney with NAV trend, returns, scale, asset allocation, holder structure, manager, and top-holding tables, filtered to the analysis date. OTC funds are not treated as listed companies or exchange-traded securities: reports should not infer company revenue, balance-sheet, cash-flow, intraday volume, or premium/discount unless a tool explicitly provides that data.
 
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">

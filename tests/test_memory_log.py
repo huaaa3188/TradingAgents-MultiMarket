@@ -535,6 +535,62 @@ class TestDeferredReflection:
         assert raw is not None and alpha is not None and days is not None
         assert days == 2
 
+    def test_fetch_returns_cn_a_uses_akshare_price_and_local_index(self, monkeypatch):
+        from tradingagents.dataflows import akshare
+
+        stock_prices = [100.0, 102.0, 104.0, 106.0, 108.0, 110.0]
+        index_prices = [3000.0, 3030.0, 3060.0, 3090.0, 3120.0, 3150.0]
+        calls = []
+
+        def fake_stock(symbol, start_date, end_date):
+            calls.append(("stock", symbol, start_date, end_date))
+            return _price_df(stock_prices)
+
+        def fake_index(symbol, start_date, end_date):
+            calls.append(("index", symbol, start_date, end_date))
+            return _price_df(index_prices)
+
+        monkeypatch.setattr(akshare, "_load_ohlcv", fake_stock)
+        monkeypatch.setattr(akshare, "load_index_ohlcv", fake_index)
+        mock_graph = MagicMock(spec=TradingAgentsGraph)
+
+        with patch("yfinance.Ticker") as mock_ticker_cls:
+            raw, alpha, days = TradingAgentsGraph._fetch_returns(
+                mock_graph, "600519.SH", "2026-01-05", holding_days=2, benchmark="000001.SS"
+            )
+
+        mock_ticker_cls.assert_not_called()
+        assert raw == pytest.approx(0.04)
+        assert alpha == pytest.approx(0.02)
+        assert days == 2
+        assert calls[0][0] == "stock"
+        assert calls[0][1] == "600519.SH"
+        assert calls[1][0] == "index"
+        assert calls[1][1] == "sh000001"
+
+    def test_fetch_returns_cn_otc_fund_uses_nav_and_local_index(self, monkeypatch):
+        from tradingagents.dataflows import akshare
+
+        nav_prices = [1.0, 1.05, 1.10, 1.12]
+        index_prices = [100.0, 101.0, 102.0, 103.0]
+
+        monkeypatch.setattr(akshare, "_load_ohlcv", lambda symbol, start, end: _price_df(nav_prices))
+        monkeypatch.setattr(akshare, "load_index_ohlcv", lambda symbol, start, end: _price_df(index_prices))
+        mock_graph = MagicMock(spec=TradingAgentsGraph)
+
+        raw, alpha, days = TradingAgentsGraph._fetch_returns(
+            mock_graph, "012920", "2026-06-04", holding_days=2, benchmark="000001.SS"
+        )
+
+        assert raw == pytest.approx(0.10)
+        assert alpha == pytest.approx(0.08)
+        assert days == 2
+
+    def test_cn_benchmark_symbol_uses_local_index_conventions(self):
+        assert TradingAgentsGraph._cn_benchmark_symbol("600519.SH", "000001.SS") == "sh000001"
+        assert TradingAgentsGraph._cn_benchmark_symbol("000001.SZ", "399001.SZ") == "sz399001"
+        assert TradingAgentsGraph._cn_benchmark_symbol("012920", "000001.SS") == "sh000001"
+
     # TradingAgentsGraph._resolve_benchmark — picks index for alpha calc
 
     def test_resolve_benchmark_explicit_override(self):

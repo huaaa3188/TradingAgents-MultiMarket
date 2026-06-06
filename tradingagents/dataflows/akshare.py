@@ -260,10 +260,25 @@ def get_global_news(curr_date: str, look_back_days: Optional[int] = None, limit:
         look_back_days = config["global_news_lookback_days"]
     if limit is None:
         limit = config["global_news_article_limit"]
-    return (
-        "AkShare global macro news is not configured in this MVP. "
-        f"Use China market context around {curr_date} with a {look_back_days}-day lookback and limit {limit}."
-    )
+    start_date = (pd.to_datetime(curr_date) - pd.DateOffset(days=look_back_days)).strftime("%Y-%m-%d")
+
+    try:
+        ak = _ak()
+        data = _collect_china_macro_news(ak, start_date, curr_date, limit)
+    except Exception as exc:
+        return (
+            "Error fetching AkShare China macro/policy news: "
+            f"{exc}. Report that local macro news is unavailable instead of inventing policy context."
+        )
+
+    if data.empty:
+        return (
+            f"No AkShare China macro/policy news found between {start_date} and {curr_date}. "
+            "Do not infer policy catalysts without tool evidence."
+        )
+
+    rows = _render_news_rows(data.head(limit))
+    return f"## China Macro and Policy News, from {start_date} to {curr_date}:\n\n" + "\n".join(rows)
 
 
 def get_insider_transactions(ticker: str) -> str:
@@ -303,6 +318,60 @@ def _load_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
             details += " | empty sources: " + ", ".join(empty_sources)
         raise AkShareDataError(f"AkShare OHLCV sources failed for {normalized}: {details}")
     return pd.DataFrame(columns=columns)
+
+
+@akshare_disk_cache(expire=14400)
+def load_index_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """Retrieve mainland China index OHLCV rows for local alpha baselines."""
+    return _load_index_ohlcv(symbol, start_date, end_date)
+
+
+def _load_index_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    ak = _ak()
+    ak_symbol = _to_akshare_index_symbol(symbol)
+    start = _compact_date(start_date)
+    end = _compact_date(end_date)
+
+    errors = []
+    empty_sources = []
+    for source_name, loader in _index_source_loaders(ak, ak_symbol, start, end):
+        try:
+            data = _normalize_ohlcv(loader(), start_date, end_date)
+        except Exception as exc:
+            errors.append(f"{source_name}: {exc}")
+            continue
+        if data.empty:
+            empty_sources.append(source_name)
+            continue
+        return data
+
+    columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    if errors:
+        details = " | ".join(errors)
+        if empty_sources:
+            details += " | empty sources: " + ", ".join(empty_sources)
+        raise AkShareDataError(f"AkShare index OHLCV sources failed for {symbol}: {details}")
+    return pd.DataFrame(columns=columns)
+
+
+def _index_source_loaders(ak, ak_symbol: str, start: str, end: str):
+    yield (
+        "tencent_stock_zh_index_daily_tx",
+        lambda: ak.stock_zh_index_daily_tx(symbol=ak_symbol, start_date=start, end_date=end),
+    )
+    yield (
+        "sina_stock_zh_index_daily",
+        lambda: ak.stock_zh_index_daily(symbol=ak_symbol),
+    )
+    yield (
+        "eastmoney_index_zh_a_hist",
+        lambda: ak.index_zh_a_hist(
+            symbol=ak_symbol[-6:],
+            period="daily",
+            start_date=start,
+            end_date=end,
+        ),
+    )
 
 
 def _ohlcv_source_loaders(ak, normalized: str, pure_symbol: str, start: str, end: str):
@@ -501,7 +570,7 @@ def _filter_statement_by_date(data: Optional[pd.DataFrame], curr_date: Optional[
     date_columns = [c for c in result.columns if "日期" in str(c) or "date" in str(c).lower() or "报告期" in str(c)]
     if not date_columns:
         return result
-    parsed = pd.to_datetime(result[date_columns[0]], errors="coerce")
+    parsed = _parse_datetime_series(result[date_columns[0]])
     return result[parsed <= pd.to_datetime(curr_date)]
 
 
@@ -510,7 +579,7 @@ def _filter_date_rows(data: pd.DataFrame, start_date: str, end_date: str) -> pd.
     date_columns = [c for c in result.columns if "时间" in str(c) or "日期" in str(c) or "date" in str(c).lower()]
     if not date_columns:
         return result
-    parsed = pd.to_datetime(result[date_columns[0]], errors="coerce")
+    parsed = _parse_datetime_series(result[date_columns[0]])
     end_exclusive = pd.to_datetime(end_date) + pd.DateOffset(days=1)
     return result[(parsed >= pd.to_datetime(start_date)) & (parsed < end_exclusive)]
 
@@ -526,7 +595,7 @@ def _filter_fund_announcements(
     if not date_columns:
         return result.head(fallback_limit), False
 
-    parsed = pd.to_datetime(result[date_columns[0]], errors="coerce")
+    parsed = _parse_datetime_series(result[date_columns[0]])
     result = result.assign(_parsed_date=parsed).dropna(subset=["_parsed_date"])
     if result.empty:
         return result, False
@@ -542,10 +611,108 @@ def _filter_fund_announcements(
     return fallback.drop(columns=["_parsed_date"]), True
 
 
+def _collect_china_macro_news(ak, start_date: str, end_date: str, limit: int) -> pd.DataFrame:
+    frames = []
+    errors = []
+
+    for source_name, loader in _china_macro_news_loaders(ak, start_date, end_date):
+        try:
+            data = loader()
+        except Exception as exc:
+            errors.append(f"{source_name}: {exc}")
+            continue
+        normalized = _normalize_news_frame(data, source_name)
+        if not normalized.empty:
+            frames.append(normalized)
+
+    if not frames:
+        if errors:
+            raise AkShareDataError(" | ".join(errors))
+        return pd.DataFrame(columns=["标题", "来源", "发布时间", "摘要", "链接"])
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = _filter_date_rows(combined, start_date, end_date)
+    if combined.empty:
+        return combined
+    combined["_dedupe_title"] = combined["标题"].astype(str).str.strip()
+    combined = combined.drop_duplicates(subset=["_dedupe_title"])
+    combined["_parsed_date"] = _parse_datetime_series(combined["发布时间"])
+    combined = combined.sort_values("_parsed_date", ascending=False, na_position="last")
+    return combined.drop(columns=["_dedupe_title", "_parsed_date"]).head(limit)
+
+
+def _china_macro_news_loaders(ak, start_date: str, end_date: str):
+    yield ("Eastmoney 7x24", lambda: ak.stock_info_global_em())
+    yield ("CLS telegraph", lambda: ak.stock_info_global_cls(symbol="全部"))
+    yield ("Sina finance 7x24", lambda: ak.stock_info_global_sina())
+    yield ("THS finance live", lambda: ak.stock_info_global_ths())
+
+    current = pd.to_datetime(end_date)
+    start = pd.to_datetime(start_date)
+    cctv_dates = []
+    while current >= start and len(cctv_dates) < 3:
+        cctv_dates.append(current.strftime("%Y%m%d"))
+        current -= pd.DateOffset(days=1)
+    for date_value in cctv_dates:
+        yield (f"CCTV News {date_value}", lambda date_value=date_value: ak.news_cctv(date=date_value))
+
+
+def _normalize_news_frame(data: Optional[pd.DataFrame], source_name: str) -> pd.DataFrame:
+    if data is None or data.empty:
+        return pd.DataFrame(columns=["标题", "来源", "发布时间", "摘要", "链接"])
+
+    rows = []
+    for _, row in data.iterrows():
+        title = _first_present(
+            row,
+            ["新闻标题", "标题", "公告标题", "title", "Title", "内容", "摘要", "资讯标题"],
+            default="",
+        )
+        summary = _first_present(
+            row,
+            ["摘要", "简介", "summary", "Summary", "新闻内容", "内容"],
+            default="",
+        )
+        if not title and summary:
+            title, summary = str(summary)[:80], str(summary)
+        if not title:
+            continue
+
+        rows.append(
+            {
+                "标题": str(title).strip(),
+                "来源": _first_present(
+                    row,
+                    ["文章来源", "来源", "source", "Source", "媒体", "信息来源"],
+                    default=source_name,
+                ),
+                "发布时间": _first_present(
+                    row,
+                    ["发布时间", "日期", "公告日期", "时间", "publish_time", "datetime", "update_time"],
+                    default="",
+                ),
+                "摘要": str(summary).strip() if summary else "",
+                "链接": _first_present(
+                    row,
+                    ["新闻链接", "链接", "公告链接", "url", "URL", "网址"],
+                    default="",
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _render_table_like(title: str, data: Optional[pd.DataFrame], max_rows: int = 12) -> list[str]:
     if data is None or data.empty:
         return [f"## {title}", "No data available.", ""]
     return [f"## {title}", data.head(max_rows).to_csv(index=False), ""]
+
+
+def _parse_datetime_series(values) -> pd.Series:
+    try:
+        return pd.to_datetime(values, errors="coerce", format="mixed")
+    except TypeError:
+        return pd.to_datetime(values, errors="coerce")
 
 
 def _render_news_rows(data: pd.DataFrame) -> list[str]:
@@ -555,7 +722,13 @@ def _render_news_rows(data: pd.DataFrame) -> list[str]:
         source = _first_present(row, ["文章来源", "来源", "_source", "source"], default="Unknown")
         date = _first_present(row, ["发布时间", "日期", "公告日期", "date"], default="")
         url = _first_present(row, ["新闻链接", "链接", "公告链接", "url"], default="")
-        rows.append(f"### {title} (source: {source})\nDate: {date}\nLink: {url}\n")
+        summary = _first_present(row, ["摘要", "summary", "简介"], default="")
+        body = f"### {title} (source: {source})\nDate: {date}\n"
+        if summary:
+            body += f"{summary}\n"
+        if url:
+            body += f"Link: {url}\n"
+        rows.append(body)
     return rows
 
 
@@ -602,6 +775,25 @@ def _prefixed_cn_symbol(ticker: str) -> str:
     if exchange == "BJ":
         return f"bj{code}"
     return normalized.lower()
+
+
+def _to_akshare_index_symbol(symbol: str) -> str:
+    normalized = symbol.strip().lower()
+    if normalized.startswith(("sh", "sz", "bj")) and len(normalized) == 8:
+        return normalized
+    upper = symbol.strip().upper()
+    code, _, exchange = upper.partition(".")
+    if exchange in ("SS", "SH"):
+        return f"sh{code}"
+    if exchange == "SZ":
+        return f"sz{code}"
+    if exchange == "BJ":
+        return f"bj{code}"
+    if code.isdigit() and len(code) == 6:
+        if code.startswith(("3", "399")):
+            return f"sz{code}"
+        return f"sh{code}"
+    return normalized
 
 
 def _fund_holdings_year(curr_date: Optional[str]) -> str:

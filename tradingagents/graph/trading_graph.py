@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Tuple, List, Optional
 
 import yfinance as yf
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +264,22 @@ class TradingAgentsGraph:
         actual_holding_days)`` or ``(None, None, None)`` if price data is
         unavailable (too recent, delisted, or network error).
         """
+        if detect_market_type(ticker) in (MarketType.CN_A, MarketType.CN_FUND):
+            return TradingAgentsGraph._fetch_cn_returns(
+                ticker, trade_date, holding_days=holding_days, benchmark=benchmark
+            )
+
+        return TradingAgentsGraph._fetch_yfinance_returns(
+            ticker, trade_date, holding_days=holding_days, benchmark=benchmark
+        )
+
+    @staticmethod
+    def _fetch_yfinance_returns(
+        ticker: str,
+        trade_date: str,
+        holding_days: int = 5,
+        benchmark: str = "SPY",
+    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
@@ -271,26 +288,81 @@ class TradingAgentsGraph:
             stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
             bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
 
-            if len(stock) < 2 or len(bench) < 2:
-                return None, None, None
-
-            actual_days = min(holding_days, len(stock) - 1, len(bench) - 1)
-            raw = float(
-                (stock["Close"].iloc[actual_days] - stock["Close"].iloc[0])
-                / stock["Close"].iloc[0]
+            return TradingAgentsGraph._returns_from_price_frames(
+                stock, bench, holding_days
             )
-            bench_ret = float(
-                (bench["Close"].iloc[actual_days] - bench["Close"].iloc[0])
-                / bench["Close"].iloc[0]
-            )
-            alpha = raw - bench_ret
-            return raw, alpha, actual_days
         except Exception as e:
             logger.warning(
                 "Could not resolve outcome for %s on %s vs %s (will retry next run): %s",
                 ticker, trade_date, benchmark, e,
             )
             return None, None, None
+
+    @staticmethod
+    def _fetch_cn_returns(
+        ticker: str,
+        trade_date: str,
+        holding_days: int = 5,
+        benchmark: str = "SPY",
+    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+        try:
+            start = datetime.strptime(trade_date, "%Y-%m-%d")
+            end = start + timedelta(days=holding_days + 10)  # China holidays need a wider buffer
+            end_str = end.strftime("%Y-%m-%d")
+
+            from tradingagents.dataflows.akshare import _load_ohlcv, load_index_ohlcv
+
+            stock = _load_ohlcv(ticker, trade_date, end_str)
+            local_benchmark = TradingAgentsGraph._cn_benchmark_symbol(ticker, benchmark)
+            bench = load_index_ohlcv(local_benchmark, trade_date, end_str)
+
+            return TradingAgentsGraph._returns_from_price_frames(
+                stock, bench, holding_days
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not resolve China outcome for %s on %s vs %s (will retry next run): %s",
+                ticker, trade_date, benchmark, e,
+            )
+            return None, None, None
+
+    @staticmethod
+    def _cn_benchmark_symbol(ticker: str, benchmark: str) -> str:
+        normalized = normalize_ticker_symbol(ticker)
+        market_type = detect_market_type(normalized)
+        if market_type == MarketType.CN_FUND:
+            return "sh000001"
+
+        _, _, exchange = normalized.partition(".")
+        if exchange == "SZ":
+            return "sz399001"
+        return "sh000001"
+
+    @staticmethod
+    def _returns_from_price_frames(
+        stock: Any,
+        bench: Any,
+        holding_days: int,
+    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+        if stock is None or bench is None or len(stock) < 2 or len(bench) < 2:
+            return None, None, None
+
+        stock_close = pd.to_numeric(stock["Close"], errors="coerce").dropna()
+        bench_close = pd.to_numeric(bench["Close"], errors="coerce").dropna()
+        if len(stock_close) < 2 or len(bench_close) < 2:
+            return None, None, None
+
+        actual_days = min(holding_days, len(stock_close) - 1, len(bench_close) - 1)
+        raw = float(
+            (stock_close.iloc[actual_days] - stock_close.iloc[0])
+            / stock_close.iloc[0]
+        )
+        bench_ret = float(
+            (bench_close.iloc[actual_days] - bench_close.iloc[0])
+            / bench_close.iloc[0]
+        )
+        alpha = raw - bench_ret
+        return raw, alpha, actual_days
 
     def _resolve_pending_entries(self, ticker: str) -> None:
         """Resolve pending log entries for ticker at the start of a new run.

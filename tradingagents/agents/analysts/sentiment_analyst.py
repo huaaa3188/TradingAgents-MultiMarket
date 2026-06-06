@@ -63,13 +63,27 @@ def create_sentiment_analyst(llm):
         end_date = state["trade_date"]
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
+        market_type = state.get("market_type")
+        is_china_market = market_type in (MarketType.CN_A.value, MarketType.CN_FUND.value)
 
         # Pre-fetch all three sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        if is_china_market:
+            stocktwits_block = (
+                "<not_used> StockTwits is not treated as a representative source for "
+                "mainland China tickers in this workflow. Infer sentiment from China-local "
+                "news, fund/company announcements, policy context, and market data instead."
+            )
+            reddit_block = (
+                "<not_used> Reddit is not treated as a core sentiment source for mainland "
+                "China tickers. If local discussion data is unavailable, state that the "
+                "retail/social sentiment read is limited instead of substituting US forum chatter."
+            )
+        else:
+            stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
+            reddit_block = fetch_reddit_posts(ticker)
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -79,7 +93,7 @@ def create_sentiment_analyst(llm):
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
             instrument_type=state.get("instrument_type"),
-            market_type=state.get("market_type"),
+            market_type=market_type,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -134,6 +148,7 @@ def _build_system_message(
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
     is_otc_fund = instrument_type == "fund" and market_type == MarketType.CN_FUND.value
+    is_china_market = market_type in (MarketType.CN_A.value, MarketType.CN_FUND.value)
     instrument_label = "fund" if is_otc_fund else "listed fund" if instrument_type == "fund" else "instrument"
 
     if is_otc_fund:
@@ -150,6 +165,14 @@ def _build_system_message(
 4. **Identify recurring thematic narratives.** What driving themes or macro policies are retail and news talking about for this tracking index/benchmark?
 5. **Absolutely avoid analyzing company revenue, earnings, competitive business moat, or corporate management.** This is a listed fund/ETF. Keep all insights focused on the assets it holds, its tracked index, scale, liquidity, and thematic risk.
 6. **Be honest about data limits.** If StockTwits or Reddit returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, flag this caveat explicitly."""
+        if is_china_market:
+            best_practices += "\n7. **For mainland China listed funds, treat China-local news, fund announcements, policy context, exchange trading constraints, liquidity, and premium/discount evidence as primary. Do not substitute US forum chatter for local investor sentiment.**"
+    elif is_china_market:
+        best_practices = """1. **Treat China-local news, announcements, and policy context as the primary sentiment evidence.** Do not substitute US forum chatter for A-share investor sentiment.
+2. **Separate policy/event evidence from opinion.** Policy headlines, exchange announcements, regulatory actions, and company disclosures are evidence; market rumors are not.
+3. **Look for divergences between price/NAV behavior, company or fund announcements, and local macro policy context.**
+4. **Account for A-share market structure.** Daily price limits, trading halts, T+1-style constraints, and holiday effects can amplify or mute sentiment signals.
+5. **Be honest about data limits.** If local social discussion is unavailable, explicitly lower confidence rather than inventing retail sentiment."""
     else:
         best_practices = """1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
 2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
@@ -160,11 +183,29 @@ def _build_system_message(
 7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
 8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call."""
 
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for the {instrument_label} {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+    if is_china_market:
+        data_sources = f"""### China local news and announcements — AkShare / Eastmoney / Tiantian Fund
+Primary evidence for mainland China sentiment. This block may include company news, fund announcements, NAV/fund context, and policy-sensitive local headlines.
 
-## Data sources (pre-fetched, in this prompt)
+<start_of_china_local_news>
+{news_block}
+<end_of_china_local_news>
 
-### News headlines — Yahoo Finance, past 7 days
+### Mainland China retail/social sentiment availability
+Use this as a data-quality caveat, not as evidence when it says unavailable.
+
+<start_of_china_retail_context>
+{stocktwits_block}
+<end_of_china_retail_context>
+
+### Offshore English-language forum caveat
+Use this as a coverage caveat. Do not treat Reddit or StockTwits as core sentiment evidence for China-local tickers unless real, ticker-specific data is present.
+
+<start_of_offshore_forum_context>
+{reddit_block}
+<end_of_offshore_forum_context>"""
+    else:
+        data_sources = f"""### News headlines — Yahoo Finance, past 7 days
 Institutional framing. Fact-driven, slower-moving signal.
 
 <start_of_news>
@@ -183,7 +224,13 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 
 <start_of_reddit>
 {reddit_block}
-<end_of_reddit>
+<end_of_reddit>"""
+
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for the {instrument_label} {ticker} covering the period from {start_date} to {end_date}, drawing on the pre-fetched data blocks below.
+
+## Data sources (pre-fetched, in this prompt)
+
+{data_sources}
 
 ## How to analyze this data (best practices)
 

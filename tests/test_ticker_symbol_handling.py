@@ -74,6 +74,8 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertIn("listed fund", context)
         self.assertIn("not as an operating company", context)
         self.assertIn("quoted in CNY", context)
+        self.assertIn("Market rules context", context)
+        self.assertIn("premium/discount", context)
 
     def test_build_instrument_context_describes_cn_otc_fund(self):
         context = build_instrument_context(
@@ -84,6 +86,18 @@ class TickerSymbolHandlingTests(unittest.TestCase):
         self.assertIn("OTC mutual fund", context)
         self.assertIn("NAV trend", context)
         self.assertIn("not as an exchange-traded listed fund", context)
+        self.assertIn("NAV publication cadence", context)
+        self.assertIn("QDII overseas-market", context)
+
+    def test_build_instrument_context_describes_cn_a_equity_rules(self):
+        context = build_instrument_context(
+            "600519.SH",
+            instrument_type=InstrumentType.EQUITY.value,
+            market_type=MarketType.CN_A.value,
+        )
+        self.assertIn("A-share equity quoted in CNY", context)
+        self.assertIn("daily price-limit rules", context)
+        self.assertIn("T+1-style settlement", context)
 
     def test_single_get_ticker_no_shadow(self):
         # Regression: cli/main.py had a duplicate get_ticker with an empty

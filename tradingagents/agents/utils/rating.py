@@ -21,10 +21,17 @@ RATINGS_5_TIER: Tuple[str, ...] = (
 )
 
 _RATING_SET = {r.lower() for r in RATINGS_5_TIER}
+_ZH_RATINGS = {
+    "买入": "Buy",
+    "增持": "Overweight",
+    "持有": "Hold",
+    "减持": "Underweight",
+    "卖出": "Sell",
+}
 
 # Matches "Rating: X" / "rating - X" / "Rating: **X**" — tolerates markdown
 # bold wrappers and either a colon or hyphen separator.
-_RATING_LABEL_RE = re.compile(r"rating.*?[:\-][\s*]*(\w+)", re.IGNORECASE)
+_RATING_LABEL_RE = re.compile(r"(rating|评级|投资建议).*?[:：\-][\s*]*(.+)", re.IGNORECASE)
 
 
 def parse_rating(text: str, default: str = "Hold") -> str:
@@ -38,13 +45,32 @@ def parse_rating(text: str, default: str = "Hold") -> str:
     """
     for line in text.splitlines():
         m = _RATING_LABEL_RE.search(line)
-        if m and m.group(1).lower() in _RATING_SET:
-            return m.group(1).capitalize()
+        if m:
+            rating = _parse_rating_fragment(m.group(2))
+            if rating:
+                return rating
 
     for line in text.splitlines():
-        for word in line.lower().split():
-            clean = word.strip("*:.,")
-            if clean in _RATING_SET:
-                return clean.capitalize()
+        rating = _parse_rating_fragment(line)
+        if rating:
+            return rating
 
     return default
+
+
+def _parse_rating_fragment(fragment: str) -> str | None:
+    cleaned = fragment.replace("*", " ")
+    for zh_label, rating in _ZH_RATINGS.items():
+        if zh_label in cleaned:
+            return rating
+
+    lowered = cleaned.lower()
+    for rating in RATINGS_5_TIER:
+        if re.search(rf"\b{re.escape(rating.lower())}\b", lowered):
+            return rating
+
+    for word in lowered.split():
+        clean = word.strip("*:.,，。()（）[]【】")
+        if clean in _RATING_SET:
+            return clean.capitalize()
+    return None

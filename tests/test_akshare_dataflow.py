@@ -350,6 +350,149 @@ def test_fund_announcement_filter_excludes_next_day_date_only_rows():
     assert result["公告标题"].tolist() == ["窗口内公告"]
 
 
+def test_global_news_renders_china_macro_policy_and_filters_dates(monkeypatch):
+    class FakeMacroAkShare:
+        def stock_info_global_em(self):
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": "央行强调保持流动性合理充裕",
+                        "发布时间": "2026-05-22 10:00:00",
+                        "来源": "东方财富",
+                        "链接": "https://example.invalid/policy",
+                    },
+                    {
+                        "标题": "未来消息不应进入回测",
+                        "发布时间": "2026-05-23 09:00:00",
+                        "来源": "东方财富",
+                    },
+                ]
+            )
+
+        def stock_info_global_cls(self, symbol="全部"):
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": "央行强调保持流动性合理充裕",
+                        "时间": "2026-05-22 10:01:00",
+                        "来源": "财联社",
+                    },
+                    {
+                        "标题": "证监会发布资本市场政策安排",
+                        "时间": "2026-05-21 16:00:00",
+                        "来源": "财联社",
+                    },
+                ]
+            )
+
+        def stock_info_global_sina(self):
+            return pd.DataFrame()
+
+        def stock_info_global_ths(self):
+            return pd.DataFrame()
+
+        def news_cctv(self, date):
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": f"新闻联播政策摘要 {date}",
+                        "日期": "2026-05-20",
+                        "来源": "央视新闻",
+                    }
+                ]
+            )
+
+    monkeypatch.setattr(akshare, "_ak", lambda: FakeMacroAkShare())
+
+    result = akshare.get_global_news("2026-05-22", look_back_days=2, limit=3)
+
+    assert "China Macro and Policy News, from 2026-05-20 to 2026-05-22" in result
+    assert "央行强调保持流动性合理充裕" in result
+    assert "证监会发布资本市场政策安排" in result
+    assert "新闻联播政策摘要" in result
+    assert "未来消息不应进入回测" not in result
+    assert result.count("央行强调保持流动性合理充裕") == 1
+
+
+def test_global_news_empty_result_is_explicit(monkeypatch):
+    class EmptyMacroAkShare:
+        def stock_info_global_em(self):
+            return pd.DataFrame()
+
+        def stock_info_global_cls(self, symbol="全部"):
+            return pd.DataFrame()
+
+        def stock_info_global_sina(self):
+            return pd.DataFrame()
+
+        def stock_info_global_ths(self):
+            return pd.DataFrame()
+
+        def news_cctv(self, date):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(akshare, "_ak", lambda: EmptyMacroAkShare())
+
+    result = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
+
+    assert "No AkShare China macro/policy news found between 2026-05-21 and 2026-05-22" in result
+    assert "Do not infer policy catalysts" in result
+
+
+def test_global_news_source_errors_degrade_to_notice(monkeypatch):
+    class FailingMacroAkShare:
+        def stock_info_global_em(self):
+            raise RuntimeError("eastmoney down")
+
+        def stock_info_global_cls(self, symbol="全部"):
+            raise RuntimeError("cls down")
+
+        def stock_info_global_sina(self):
+            raise RuntimeError("sina down")
+
+        def stock_info_global_ths(self):
+            raise RuntimeError("ths down")
+
+        def news_cctv(self, date):
+            raise RuntimeError("cctv down")
+
+    monkeypatch.setattr(akshare, "_ak", lambda: FailingMacroAkShare())
+
+    result = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
+
+    assert "Error fetching AkShare China macro/policy news" in result
+    assert "local macro news is unavailable" in result
+
+
+def test_load_index_ohlcv_uses_akshare_index_symbol(monkeypatch):
+    class FakeIndexAkShare:
+        def __init__(self):
+            self.calls = []
+
+        def stock_zh_index_daily_tx(self, **kwargs):
+            self.calls.append(("stock_zh_index_daily_tx", kwargs))
+            return _lowercase_ohlcv_frame()
+
+        def stock_zh_index_daily(self, **kwargs):
+            self.calls.append(("stock_zh_index_daily", kwargs))
+            return pd.DataFrame()
+
+        def index_zh_a_hist(self, **kwargs):
+            self.calls.append(("index_zh_a_hist", kwargs))
+            return pd.DataFrame()
+
+    fake = FakeIndexAkShare()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    data = akshare.load_index_ohlcv("000001.SS", "2026-01-01", "2026-01-03")
+
+    assert data["Close"].tolist() == [10.5, 11.5, 12.5]
+    assert fake.calls[0] == (
+        "stock_zh_index_daily_tx",
+        {"symbol": "sh000001", "start_date": "20260101", "end_date": "20260103"},
+    )
+
+
 def test_route_to_vendor_can_select_akshare(monkeypatch):
     fake = FakeAkShare()
     monkeypatch.setattr(akshare, "_ak", lambda: fake)

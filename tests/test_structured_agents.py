@@ -12,20 +12,33 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
+import tradingagents.default_config as default_config
 from tradingagents.agents.analysts.sentiment_analyst import create_sentiment_analyst
 from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.schemas import (
+    PortfolioDecision,
     PortfolioRating,
     ResearchPlan,
     SentimentBand,
     SentimentReport,
     TraderAction,
     TraderProposal,
+    render_pm_decision,
     render_research_plan,
     render_sentiment_report,
     render_trader_proposal,
 )
 from tradingagents.agents.trader.trader import create_trader
+from tradingagents.dataflows.config import set_config
+
+
+@pytest.fixture(autouse=True)
+def reset_output_language_config():
+    cfg = default_config.DEFAULT_CONFIG.copy()
+    cfg["output_language"] = "English"
+    set_config(cfg)
+    yield
+    set_config(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +80,16 @@ class TestRenderTraderProposal:
         assert "Position Sizing" not in md
         assert "FINAL TRANSACTION PROPOSAL: **SELL**" in md
 
+    def test_chinese_output_localizes_headers_and_keeps_canonical_action(self):
+        set_config({"output_language": "Chinese"})
+        p = TraderProposal(action=TraderAction.BUY, reasoning="技术面改善。", entry_price=12.3)
+
+        md = render_trader_proposal(p)
+
+        assert "**交易动作**: 买入 (Buy)" in md
+        assert "**入场价格**: 12.3" in md
+        assert "FINAL TRANSACTION PROPOSAL: **BUY**" in md
+
 
 @pytest.mark.unit
 class TestRenderResearchPlan:
@@ -90,6 +113,40 @@ class TestRenderResearchPlan:
             )
             md = render_research_plan(p)
             assert f"**Recommendation**: {rating.value}" in md
+
+    def test_chinese_output_localizes_research_plan(self):
+        set_config({"output_language": "Chinese"})
+        p = ResearchPlan(
+            recommendation=PortfolioRating.OVERWEIGHT,
+            rationale="多头证据更强。",
+            strategic_actions="分批增持。",
+        )
+
+        md = render_research_plan(p)
+
+        assert "**投资建议**: 增持 (Overweight)" in md
+        assert "**理由**: 多头证据更强。" in md
+        assert "**Strategic Actions**" not in md
+
+
+@pytest.mark.unit
+class TestRenderPortfolioDecision:
+    def test_chinese_output_localizes_pm_decision(self):
+        set_config({"output_language": "Chinese"})
+        decision = PortfolioDecision(
+            rating=PortfolioRating.UNDERWEIGHT,
+            executive_summary="降低仓位。",
+            investment_thesis="风险回报不佳。",
+            price_target=10.5,
+            time_horizon="1-3个月",
+        )
+
+        md = render_pm_decision(decision)
+
+        assert "**评级**: 减持 (Underweight)" in md
+        assert "**执行摘要**: 降低仓位。" in md
+        assert "**目标价格**: 10.5" in md
+        assert "**Rating**" not in md
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +338,21 @@ class TestRenderSentimentReport:
                 confidence="medium", narrative="n",
             )
             assert band.value in render_sentiment_report(report)
+
+    def test_chinese_output_localizes_sentiment_header(self):
+        set_config({"output_language": "Chinese"})
+        report = SentimentReport(
+            overall_band=SentimentBand.MILDLY_BEARISH,
+            overall_score=4.0,
+            confidence="low",
+            narrative="本地新闻偏弱。",
+        )
+
+        md = render_sentiment_report(report)
+
+        assert "**总体情绪**: **温和看空 (Mildly Bearish)**" in md
+        assert "**置信度**: 低 (Low)" in md
+        assert "本地新闻偏弱。" in md
 
     def test_score_out_of_range_rejected(self):
         with pytest.raises(ValidationError):

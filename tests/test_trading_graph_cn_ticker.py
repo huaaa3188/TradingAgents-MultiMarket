@@ -163,6 +163,20 @@ def test_sentiment_analyst_builds_prompt_adaptively_for_fund():
     assert "leading indicator of thematic or index-level sentiment" in fund_msg
     assert "Absolutely avoid analyzing company revenue" in fund_msg
 
+    cn_listed_fund_msg = _build_system_message(
+        ticker="510300.SH",
+        start_date="2026-01-01",
+        end_date="2026-01-08",
+        news_block="news",
+        stocktwits_block="stocktwits",
+        reddit_block="reddit",
+        instrument_type="fund",
+        market_type="cn_a",
+    )
+    assert "This is a listed fund/ETF" in cn_listed_fund_msg
+    assert "China local news and announcements" in cn_listed_fund_msg
+    assert "Do not substitute US forum chatter" in cn_listed_fund_msg
+
     otc_fund_msg = _build_system_message(
         ticker="012920",
         start_date="2026-06-01",
@@ -175,7 +189,58 @@ def test_sentiment_analyst_builds_prompt_adaptively_for_fund():
     )
     assert "fund share class" in otc_fund_msg
     assert "NAV, assets it holds, scale, fees" in otc_fund_msg
+    assert "China local news and announcements" in otc_fund_msg
+    assert "News headlines — Yahoo Finance" not in otc_fund_msg
+    assert "Reddit posts — r/wallstreetbets" not in otc_fund_msg
     assert "This is a listed fund/ETF" not in otc_fund_msg
+
+
+def test_sentiment_analyst_skips_us_social_fetches_for_cn_ticker(monkeypatch):
+    import tradingagents.agents.analysts.sentiment_analyst as sentiment_mod
+    from tradingagents.agents.schemas import SentimentBand, SentimentReport
+
+    monkeypatch.setattr(
+        sentiment_mod,
+        "get_news",
+        type("FakeNewsTool", (), {"func": staticmethod(lambda *args: "本地新闻与公告")})(),
+    )
+    monkeypatch.setattr(
+        sentiment_mod,
+        "fetch_stocktwits_messages",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("StockTwits should not be called")),
+    )
+    monkeypatch.setattr(
+        sentiment_mod,
+        "fetch_reddit_posts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("Reddit should not be called")),
+    )
+
+    structured = MagicMock()
+    structured.invoke.return_value = SentimentReport(
+        overall_band=SentimentBand.NEUTRAL,
+        overall_score=5.0,
+        confidence="low",
+        narrative="本地新闻有限。",
+    )
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = structured
+
+    node = sentiment_mod.create_sentiment_analyst(mock_llm)
+    result = node(
+        {
+            "company_of_interest": "600519.SH",
+            "trade_date": "2026-05-22",
+            "asset_type": "stock",
+            "instrument_type": "equity",
+            "market_type": "cn_a",
+            "messages": [("human", "600519.SH")],
+        }
+    )
+
+    assert "本地新闻有限" in result["sentiment_report"]
+    prompt_text = str(structured.invoke.call_args[0][0])
+    assert "China local news and announcements" in prompt_text
+    assert "StockTwits is not treated as a representative source" in prompt_text
 
 
 def test_news_analyst_prompt_adapts_for_fund():
