@@ -1,3 +1,5 @@
+import time
+
 import pandas as pd
 import pytest
 
@@ -403,6 +405,7 @@ def test_global_news_renders_china_macro_policy_and_filters_dates(monkeypatch):
             )
 
     monkeypatch.setattr(akshare, "_ak", lambda: FakeMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: False)
 
     result = akshare.get_global_news("2026-05-22", look_back_days=2, limit=3)
 
@@ -432,6 +435,7 @@ def test_global_news_empty_result_is_explicit(monkeypatch):
             return pd.DataFrame()
 
     monkeypatch.setattr(akshare, "_ak", lambda: EmptyMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: False)
 
     result = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
 
@@ -457,11 +461,90 @@ def test_global_news_source_errors_degrade_to_notice(monkeypatch):
             raise RuntimeError("cctv down")
 
     monkeypatch.setattr(akshare, "_ak", lambda: FailingMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: False)
 
     result = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
 
     assert "Error fetching AkShare China macro/policy news" in result
     assert "local macro news is unavailable" in result
+
+
+def test_global_news_historical_dates_skip_realtime_sources(monkeypatch):
+    calls = []
+
+    class HistoricalMacroAkShare:
+        def stock_info_global_em(self):
+            calls.append("eastmoney")
+            return pd.DataFrame()
+
+        def stock_info_global_cls(self, symbol="全部"):
+            calls.append("cls")
+            return pd.DataFrame()
+
+        def stock_info_global_sina(self):
+            calls.append("sina")
+            return pd.DataFrame()
+
+        def stock_info_global_ths(self):
+            calls.append("ths")
+            return pd.DataFrame()
+
+        def news_cctv(self, date):
+            calls.append(f"cctv:{date}")
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": f"历史宏观政策 {date}",
+                        "日期": "2026-05-20",
+                        "来源": "央视新闻",
+                    }
+                ]
+            )
+
+    monkeypatch.setattr(akshare, "_ak", lambda: HistoricalMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: True)
+
+    result = akshare.get_global_news("2026-05-22", look_back_days=2, limit=5)
+
+    assert "历史宏观政策" in result
+    assert calls
+    assert all(call.startswith("cctv:") for call in calls)
+
+
+def test_global_news_source_timeout_degrades_to_available_sources(monkeypatch):
+    class SlowThenFastMacroAkShare:
+        def stock_info_global_em(self):
+            time.sleep(0.05)
+            return pd.DataFrame()
+
+        def stock_info_global_sina(self):
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": "快速宏观来源",
+                        "发布时间": "2026-05-22 09:00:00",
+                        "来源": "新浪财经",
+                    }
+                ]
+            )
+
+        def stock_info_global_ths(self):
+            return pd.DataFrame()
+
+        def stock_info_global_cls(self, symbol="全部"):
+            return pd.DataFrame()
+
+        def news_cctv(self, date):
+            return pd.DataFrame()
+
+    monkeypatch.setattr(akshare, "_ak", lambda: SlowThenFastMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: False)
+    monkeypatch.setattr(akshare, "_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS", 0.01)
+
+    result = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
+
+    assert "快速宏观来源" in result
+    assert "China Macro and Policy News" in result
 
 
 def test_load_index_ohlcv_uses_akshare_index_symbol(monkeypatch):

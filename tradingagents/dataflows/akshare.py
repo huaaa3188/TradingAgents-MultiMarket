@@ -1,4 +1,6 @@
 from datetime import datetime
+import queue
+import threading
 from typing import Optional
 
 import pandas as pd
@@ -22,6 +24,7 @@ from diskcache import Cache
 
 _UNINITIALIZED_CACHE = object()
 cache = _UNINITIALIZED_CACHE
+_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS = 12
 
 
 def _get_cache():
@@ -617,7 +620,7 @@ def _collect_china_macro_news(ak, start_date: str, end_date: str, limit: int) ->
 
     for source_name, loader in _china_macro_news_loaders(ak, start_date, end_date):
         try:
-            data = loader()
+            data = _call_macro_news_loader(source_name, loader)
         except Exception as exc:
             errors.append(f"{source_name}: {exc}")
             continue
@@ -642,10 +645,11 @@ def _collect_china_macro_news(ak, start_date: str, end_date: str, limit: int) ->
 
 
 def _china_macro_news_loaders(ak, start_date: str, end_date: str):
-    yield ("Eastmoney 7x24", lambda: ak.stock_info_global_em())
-    yield ("CLS telegraph", lambda: ak.stock_info_global_cls(symbol="全部"))
-    yield ("Sina finance 7x24", lambda: ak.stock_info_global_sina())
-    yield ("THS finance live", lambda: ak.stock_info_global_ths())
+    if not _is_historical_macro_news_date(end_date):
+        yield ("Eastmoney 7x24", lambda: ak.stock_info_global_em())
+        yield ("Sina finance 7x24", lambda: ak.stock_info_global_sina())
+        yield ("THS finance live", lambda: ak.stock_info_global_ths())
+        yield ("CLS telegraph", lambda: ak.stock_info_global_cls(symbol="全部"))
 
     current = pd.to_datetime(end_date)
     start = pd.to_datetime(start_date)
@@ -655,6 +659,41 @@ def _china_macro_news_loaders(ak, start_date: str, end_date: str):
         current -= pd.DateOffset(days=1)
     for date_value in cctv_dates:
         yield (f"CCTV News {date_value}", lambda date_value=date_value: ak.news_cctv(date=date_value))
+
+
+def _call_macro_news_loader(source_name: str, loader):
+    result_queue = queue.Queue(maxsize=1)
+
+    def run_loader():
+        try:
+            result_queue.put(("ok", loader()))
+        except Exception as exc:
+            result_queue.put(("error", exc))
+
+    thread = threading.Thread(
+        target=run_loader,
+        name=f"akshare-macro-news-{source_name}",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS)
+    if thread.is_alive():
+        raise TimeoutError(
+            f"{source_name} did not return within {_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS} seconds"
+        )
+
+    status, value = result_queue.get_nowait()
+    if status == "error":
+        raise value
+    return value
+
+
+def _is_historical_macro_news_date(end_date: str) -> bool:
+    try:
+        requested = pd.to_datetime(end_date).normalize()
+    except Exception:
+        return False
+    return requested < pd.Timestamp.now().normalize()
 
 
 def _normalize_news_frame(data: Optional[pd.DataFrame], source_name: str) -> pd.DataFrame:
