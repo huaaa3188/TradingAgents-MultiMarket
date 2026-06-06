@@ -6,6 +6,8 @@ forward-compat regex so future ``claude-{opus,sonnet}-X-Y`` releases
 inherit support automatically.
 """
 
+import warnings
+
 import pytest
 
 from tradingagents.llm_clients import anthropic_client as mod
@@ -67,6 +69,21 @@ class TestEffortGate:
             model="claude-experimental-x", effort="medium", api_key="x"
         ).get_llm()
         assert "effort" not in captured["kwargs"]
+
+    def test_custom_anthropic_gateway_accepts_non_catalog_model_without_warning(self, monkeypatch):
+        """Anthropic-compatible gateways may route non-Claude model IDs."""
+        captured = _capture_kwargs(monkeypatch)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            mod.AnthropicClient(
+                model="deepseek/deepseek-v4-pro",
+                base_url="https://gateway.example/anthropic",
+                api_key="x",
+            ).get_llm()
+
+        assert caught == []
+        assert captured["kwargs"]["model"] == "deepseek/deepseek-v4-pro"
+        assert captured["kwargs"]["base_url"] == "https://gateway.example/anthropic"
 
     def test_other_kwargs_still_forwarded_when_effort_skipped(self, monkeypatch):
         """Skipping effort must not break other passthrough kwargs."""

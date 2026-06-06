@@ -27,6 +27,15 @@ _API = "https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
 _UA = "tradingagents/0.2 (+https://github.com/TauricResearch/TradingAgents)"
 
 
+def _error_label(exc: Exception) -> str:
+    """Compact network/parse error label for diagnostics."""
+    if isinstance(exc, HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, URLError):
+        return f"URL error: {exc.reason}"
+    return type(exc).__name__
+
+
 def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.0) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
@@ -41,8 +50,8 @@ def fetch_stocktwits_messages(ticker: str, limit: int = 30, timeout: float = 10.
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
     except (HTTPError, URLError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.warning("StockTwits fetch failed for %s: %s", ticker, exc)
-        return f"<stocktwits unavailable: {type(exc).__name__}>"
+        logger.debug("StockTwits fetch failed for %s: %s", ticker, _error_label(exc))
+        return f"<stocktwits unavailable: {_error_label(exc)}>"
 
     messages = data.get("messages", []) if isinstance(data, dict) else []
     if not messages:

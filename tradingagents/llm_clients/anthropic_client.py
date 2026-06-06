@@ -1,5 +1,6 @@
 import re
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from langchain_anthropic import ChatAnthropic
 
@@ -20,12 +21,23 @@ _EFFORT_EXACT = {
     "claude-mythos-preview",  # non-standard preview name; effort-capable
 }
 _EFFORT_PATTERN = re.compile(r"^claude-(opus|sonnet)-\d+-\d+$")
+_OFFICIAL_ANTHROPIC_HOSTS = {"api.anthropic.com"}
 
 
 def _supports_effort(model: str) -> bool:
     """Whether Anthropic accepts the ``effort`` parameter for this model."""
     model_lc = model.lower()
     return model_lc in _EFFORT_EXACT or bool(_EFFORT_PATTERN.match(model_lc))
+
+
+def _is_custom_anthropic_gateway(base_url: Optional[str]) -> bool:
+    """Whether the configured endpoint is not Anthropic's official API host."""
+    if not base_url:
+        return False
+    host = urlparse(base_url).hostname
+    if not host:
+        return False
+    return host.lower() not in _OFFICIAL_ANTHROPIC_HOSTS
 
 
 class NormalizedChatAnthropic(ChatAnthropic):
@@ -65,4 +77,6 @@ class AnthropicClient(BaseLLMClient):
 
     def validate_model(self) -> bool:
         """Validate model for Anthropic."""
+        if _is_custom_anthropic_gateway(self.base_url):
+            return True
         return validate_model("anthropic", self.model)

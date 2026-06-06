@@ -46,6 +46,15 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
 
 
+def _error_label(exc: Exception) -> str:
+    """Compact network/parse error label for diagnostics."""
+    if isinstance(exc, HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, URLError):
+        return f"URL error: {exc.reason}"
+    return type(exc).__name__
+
+
 def _search_qs(ticker: str, limit: int) -> str:
     return urlencode({
         "q": ticker,
@@ -95,7 +104,10 @@ def _fetch_subreddit_rss(
         with urlopen(req, timeout=timeout) as resp:
             root = ET.fromstring(resp.read())
     except (HTTPError, URLError, TimeoutError, ET.ParseError) as exc:
-        logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
+        logger.debug(
+            "Reddit RSS fetch failed for r/%s - %s: %s",
+            sub, ticker, _error_label(exc),
+        )
         return []
 
     posts = []
@@ -130,9 +142,9 @@ def _fetch_subreddit(
         children = (payload.get("data") or {}).get("children") or []
         return [c.get("data", {}) for c in children if isinstance(c, dict)]
     except (HTTPError, URLError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.warning(
-            "Reddit JSON fetch failed for r/%s · %s: %s — falling back to RSS feed.",
-            sub, ticker, exc,
+        logger.debug(
+            "Reddit JSON fetch failed for r/%s - %s: %s; falling back to RSS feed.",
+            sub, ticker, _error_label(exc),
         )
         return _fetch_subreddit_rss(ticker, sub, limit, timeout)
 

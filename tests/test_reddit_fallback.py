@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -84,6 +85,17 @@ class TestJsonFallsBackToRss:
             out = reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0)
         rss.assert_called_once()
         assert out and out[0]["source"] == "rss"
+
+    def test_http_error_fallback_uses_debug_log_without_raw_exception(self, caplog):
+        err = HTTPError("url", 404, "Not Found", {}, None)
+        with caplog.at_level(logging.DEBUG, logger=reddit.__name__):
+            with patch.object(reddit, "urlopen", side_effect=err), \
+                 patch.object(reddit, "_fetch_subreddit_rss", return_value=[]):
+                assert reddit._fetch_subreddit("NVDA", "stocks", 5, 5.0) == []
+
+        assert "HTTP 404" in caplog.text
+        assert "HTTP Error 404" not in caplog.text
+        assert all(record.levelno < logging.WARNING for record in caplog.records)
 
 
 @pytest.mark.unit
