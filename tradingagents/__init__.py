@@ -12,6 +12,26 @@ try:
 
     load_dotenv(find_dotenv(usecwd=True))
     load_dotenv(find_dotenv(".env.enterprise", usecwd=True), override=False)
+
+    import os
+    for env_var in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "XAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_CN_API_KEY",
+        "ZHIPU_API_KEY",
+        "ZHIPU_CN_API_KEY",
+        "MINIMAX_API_KEY",
+        "MINIMAX_CN_API_KEY",
+        "OPENROUTER_API_KEY",
+    ]:
+        val = os.environ.get(env_var)
+        if val is not None:
+            os.environ[env_var] = val.strip()
 except ImportError:
     pass
 

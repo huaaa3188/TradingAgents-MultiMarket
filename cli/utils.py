@@ -538,6 +538,8 @@ def ensure_api_key(provider: str) -> Optional[str]:
         )
         return None
 
+    key = key.strip()
+
     env_path = find_dotenv(usecwd=True) or str(Path.cwd() / ".env")
     Path(env_path).touch(exist_ok=True)
     set_key(env_path, env_var, key)

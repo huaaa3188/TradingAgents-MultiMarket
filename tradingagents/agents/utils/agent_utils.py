@@ -81,6 +81,10 @@ def resolve_instrument_identity(ticker: str) -> dict:
     ticker-only context rather than failing before analysis starts. Cached so
     the lookup happens at most once per ticker per process.
     """
+    from tradingagents.dataflows.instruments import detect_market_type, MarketType
+    if detect_market_type(ticker) in (MarketType.CN_A, MarketType.CN_FUND):
+        return {}
+
     try:
         info = yf.Ticker(ticker.upper()).info or {}
     except Exception as exc:  # noqa: BLE001 — fail open, never block the run

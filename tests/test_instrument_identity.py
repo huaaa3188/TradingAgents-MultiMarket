@@ -64,6 +64,13 @@ class ResolveInstrumentIdentityTests(unittest.TestCase):
         mock.assert_called_once()  # second call served from cache
         self.assertEqual(first, second)
 
+    def test_cn_tickers_skip_yfinance_identity_lookup(self):
+        with patch("tradingagents.agents.utils.agent_utils.yf.Ticker") as mock:
+            self.assertEqual(resolve_instrument_identity("600519"), {})
+            self.assertEqual(resolve_instrument_identity("012920"), {})
+
+        mock.assert_not_called()
+
 
 @pytest.mark.unit
 class BuildInstrumentContextTests(unittest.TestCase):
