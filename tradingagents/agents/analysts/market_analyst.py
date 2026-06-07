@@ -1,5 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
+    append_fund_semantic_warning,
     get_instrument_context_from_state,
     get_indicators,
     get_language_instruction,
@@ -93,6 +94,7 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
 
         if len(result.tool_calls) == 0:
             report = result.content
+            report = append_fund_semantic_warning(state, report)
 
         return {
             "messages": [result],

@@ -87,6 +87,44 @@ class TestVerifiedSnapshot:
         assert "| NAV | 4.60 |" in snap
         assert "9.90" not in snap
 
+    def test_cn_a_equity_snapshot_uses_akshare_ohlcv(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            validator,
+            "load_ohlcv",
+            lambda s, d: (_ for _ in ()).throw(AssertionError("yfinance loader should not be called")),
+        )
+        monkeypatch.setattr(
+            validator,
+            "_load_cn_ohlcv",
+            lambda symbol, curr_date: calls.append((symbol, curr_date)) or _sample_ohlcv(),
+        )
+
+        snap = validator.build_verified_market_snapshot("600519", "2026-05-20")
+
+        assert calls == [("600519.SH", "2026-05-20")]
+        assert "Verified market data snapshot for 600519" in snap
+        assert "Latest trading row used: 2026-05-20" in snap
+
+    def test_cn_listed_fund_snapshot_uses_akshare_ohlcv(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            validator,
+            "load_ohlcv",
+            lambda s, d: (_ for _ in ()).throw(AssertionError("yfinance loader should not be called")),
+        )
+        monkeypatch.setattr(
+            validator,
+            "_load_cn_ohlcv",
+            lambda symbol, curr_date: calls.append((symbol, curr_date)) or _sample_ohlcv(),
+        )
+
+        snap = validator.build_verified_market_snapshot("510300", "2026-05-20")
+
+        assert calls == [("510300.SH", "2026-05-20")]
+        assert "Verified market data snapshot for 510300" in snap
+        assert "Recent verified closes" in snap
+
 
 @pytest.mark.unit
 class TestTool:

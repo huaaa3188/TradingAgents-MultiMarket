@@ -7,7 +7,10 @@ from tradingagents.agents.researchers.bull_researcher import create_bull_researc
 from tradingagents.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
 from tradingagents.agents.risk_mgmt.conservative_debator import create_conservative_debator
 from tradingagents.agents.risk_mgmt.neutral_debator import create_neutral_debator
-from tradingagents.agents.utils.agent_utils import build_verified_target_context
+from tradingagents.agents.utils.agent_utils import (
+    append_fund_semantic_warning,
+    build_verified_target_context,
+)
 
 
 class CapturingLLM:
@@ -65,6 +68,33 @@ def test_build_verified_target_context_uses_state_identity():
     context = build_verified_target_context(_fund_state())
 
     _assert_verified_target_context("Target identity:\n" + context)
+
+
+def test_fund_semantic_warning_flags_company_fundamentals_terms():
+    report = "The ETF has strong company revenue and a resilient 资产负债表."
+
+    guarded = append_fund_semantic_warning(_fund_state(), report)
+
+    assert report in guarded
+    assert "Fund semantics warning:" in guarded
+    assert "company revenue" in guarded
+    assert "资产负债表" in guarded
+
+
+def test_fund_semantic_warning_ignores_clean_fund_report():
+    report = "The listed fund has NAV momentum, low fees, and diversified holdings."
+
+    assert append_fund_semantic_warning(_fund_state(), report) == report
+
+
+def test_fund_semantic_warning_ignores_equity_state():
+    state = {
+        **_fund_state(),
+        "instrument_type": "equity",
+    }
+    report = "Company revenue and cash flow are improving."
+
+    assert append_fund_semantic_warning(state, report) == report
 
 
 @pytest.mark.parametrize(

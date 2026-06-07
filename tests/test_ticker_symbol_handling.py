@@ -18,18 +18,27 @@ class TickerSymbolHandlingTests(unittest.TestCase):
 
     def test_normalize_ticker_symbol_adds_a_share_suffixes(self):
         self.assertEqual(normalize_ticker_symbol("600519"), "600519.SH")
+        self.assertEqual(normalize_ticker_symbol("688981"), "688981.SH")
         self.assertEqual(normalize_ticker_symbol("000001"), "000001.SZ")
+        self.assertEqual(normalize_ticker_symbol("002594"), "002594.SZ")
         self.assertEqual(normalize_ticker_symbol("300750"), "300750.SZ")
+        self.assertEqual(normalize_ticker_symbol("430047"), "430047.BJ")
+        self.assertEqual(normalize_ticker_symbol("830833"), "830833.BJ")
 
     def test_normalize_ticker_symbol_adds_listed_fund_suffixes(self):
         self.assertEqual(normalize_ticker_symbol("510300"), "510300.SH")
+        self.assertEqual(normalize_ticker_symbol("588000"), "588000.SH")
+        self.assertEqual(normalize_ticker_symbol("501018"), "501018.SH")
         self.assertEqual(normalize_ticker_symbol("159915"), "159915.SZ")
         self.assertEqual(normalize_ticker_symbol("161725"), "161725.SZ")
+        self.assertEqual(normalize_ticker_symbol("180101"), "180101.SZ")
         self.assertEqual(normalize_ticker_symbol("508000"), "508000.SH")
 
     def test_normalize_ticker_symbol_preserves_cn_otc_fund_codes(self):
         self.assertEqual(normalize_ticker_symbol("012920"), "012920")
         self.assertEqual(normalize_ticker_symbol("012922"), "012922")
+        self.assertEqual(normalize_ticker_symbol("020003"), "020003")
+        self.assertEqual(normalize_ticker_symbol("021508"), "021508")
 
     def test_detect_market_type(self):
         self.assertEqual(detect_market_type("600519"), MarketType.CN_A)
@@ -41,9 +50,12 @@ class TickerSymbolHandlingTests(unittest.TestCase):
 
     def test_detect_instrument_type(self):
         self.assertEqual(detect_instrument_type("600519"), InstrumentType.EQUITY)
+        self.assertEqual(detect_instrument_type("430047"), InstrumentType.EQUITY)
         self.assertEqual(detect_instrument_type("510300"), InstrumentType.FUND)
+        self.assertEqual(detect_instrument_type("588000"), InstrumentType.FUND)
         self.assertEqual(detect_instrument_type("159915"), InstrumentType.FUND)
         self.assertEqual(detect_instrument_type("012920"), InstrumentType.FUND)
+        self.assertEqual(detect_instrument_type("020003"), InstrumentType.FUND)
         self.assertEqual(detect_instrument_type("AAPL"), InstrumentType.EQUITY)
         self.assertEqual(detect_instrument_type("BTC-USD"), InstrumentType.CRYPTO)
 

@@ -56,6 +56,57 @@ def is_chinese_output_language(lang: str = None) -> bool:
     return normalized in {"chinese", "zh", "zh-cn", "cn", "中文", "简体中文", "汉语"}
 
 
+_FUND_COMPANY_SEMANTIC_TERMS = (
+    "company revenue",
+    "company earnings",
+    "company profit",
+    "profit margin",
+    "corporate debt",
+    "balance sheet",
+    "balance-sheet",
+    "cash flow statement",
+    "cash-flow",
+    "公司营收",
+    "公司收入",
+    "公司利润",
+    "利润率",
+    "资产负债表",
+    "现金流量表",
+)
+
+
+def find_fund_company_semantic_violations(report: str) -> list[str]:
+    """Return company-fundamental terms that should not drive fund analysis."""
+    if not isinstance(report, str) or not report:
+        return []
+    lower_report = report.lower()
+    return [
+        term
+        for term in _FUND_COMPANY_SEMANTIC_TERMS
+        if term.lower() in lower_report
+    ]
+
+
+def append_fund_semantic_warning(state: Mapping[str, Any], report: str) -> str:
+    """Append a non-blocking warning when a fund report uses company semantics."""
+    if not report or state.get("instrument_type") != InstrumentType.FUND.value:
+        return report
+    if "Fund semantics warning:" in report:
+        return report
+
+    violations = find_fund_company_semantic_violations(report)
+    if not violations:
+        return report
+
+    terms = ", ".join(sorted(set(violations), key=str.lower))
+    return (
+        report
+        + "\n\n> Fund semantics warning: this fund report contains operating-company "
+        + f"term(s): {terms}. Review these claims against fund/NAV/holdings context; "
+        + "do not treat them as company fundamentals without explicit tool evidence."
+    )
+
+
 def _clean_identity_value(value: Any) -> Optional[str]:
     """Return a trimmed string, or None for empty / placeholder-ish values."""
     if not isinstance(value, str):

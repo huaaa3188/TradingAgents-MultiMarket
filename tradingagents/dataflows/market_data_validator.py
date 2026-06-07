@@ -35,9 +35,13 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     verification path, so it must not trust its input to be pre-filtered.
     """
     normalized = normalize_ticker_symbol(symbol)
-    if detect_market_type(normalized) == MarketType.CN_FUND:
+    market_type = detect_market_type(normalized)
+    if market_type == MarketType.CN_FUND:
         data = get_fund_nav_history(normalized, None, curr_date)
         no_data_label = "NAV"
+    elif market_type == MarketType.CN_A:
+        data = _load_cn_ohlcv(normalized, curr_date)
+        no_data_label = "OHLCV"
     else:
         data = load_ohlcv(symbol, curr_date)
         no_data_label = "OHLCV"
@@ -51,6 +55,14 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     if df.empty:
         raise ValueError(f"No {no_data_label} rows on or before {curr_date} for {symbol}.")
     return df
+
+
+def _load_cn_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
+    end_dt = pd.to_datetime(curr_date)
+    start_date = (end_dt - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
+    from tradingagents.dataflows.akshare import _load_ohlcv
+
+    return _load_ohlcv(symbol, start_date, curr_date)
 
 
 def _fmt(value) -> str:

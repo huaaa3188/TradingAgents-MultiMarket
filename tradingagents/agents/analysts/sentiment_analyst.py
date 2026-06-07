@@ -31,6 +31,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.schemas import SentimentReport, render_sentiment_report
 from tradingagents.agents.utils.agent_utils import (
+    append_fund_semantic_warning,
     get_instrument_context_from_state,
     get_language_instruction,
     get_news,
@@ -126,6 +127,7 @@ def create_sentiment_analyst(llm):
             render_sentiment_report,
             "Sentiment Analyst",
         )
+        report_text = append_fund_semantic_warning(state, report_text)
 
         return {
             "messages": [AIMessage(content=report_text)],
