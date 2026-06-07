@@ -22,7 +22,9 @@ def isolate_akshare_cache(monkeypatch, tmp_path):
     temp_cache = Cache(str(tmp_path / "test_akshare_cache"))
     monkeypatch.setattr(akshare, "cache", temp_cache)
     monkeypatch.setattr(akshare, "get_fund_profile_tables", lambda symbol, curr_date: [])
+    akshare._macro_news_source_health.clear()
     yield
+    akshare._macro_news_source_health.clear()
 
 
 class FakeAkShare:
@@ -545,6 +547,99 @@ def test_global_news_source_timeout_degrades_to_available_sources(monkeypatch):
 
     assert "快速宏观来源" in result
     assert "China Macro and Policy News" in result
+
+
+def test_global_news_total_budget_returns_available_sources(monkeypatch):
+    calls = []
+
+    class BudgetedMacroAkShare:
+        def stock_info_global_em(self):
+            calls.append("eastmoney")
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": "预算内宏观来源",
+                        "发布时间": "2026-05-22 09:00:00",
+                        "来源": "东方财富",
+                    }
+                ]
+            )
+
+        def stock_info_global_sina(self):
+            calls.append("sina")
+            time.sleep(0.05)
+            return pd.DataFrame()
+
+        def stock_info_global_ths(self):
+            calls.append("ths")
+            return pd.DataFrame()
+
+        def stock_info_global_cls(self, symbol="全部"):
+            calls.append("cls")
+            return pd.DataFrame()
+
+        def news_cctv(self, date):
+            calls.append(f"cctv:{date}")
+            return pd.DataFrame()
+
+    monkeypatch.setattr(akshare, "_ak", lambda: BudgetedMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: False)
+    monkeypatch.setattr(akshare, "_MACRO_NEWS_TOTAL_BUDGET_SECONDS", 0.02)
+    monkeypatch.setattr(akshare, "_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS", 0.05)
+
+    result = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
+
+    assert "预算内宏观来源" in result
+    assert "sina" in calls
+    assert "ths" not in calls
+
+
+def test_global_news_recent_timeout_skips_unhealthy_source(monkeypatch):
+    calls = []
+
+    class FlakyMacroAkShare:
+        def stock_info_global_em(self):
+            calls.append("eastmoney")
+            time.sleep(0.05)
+            return pd.DataFrame()
+
+        def stock_info_global_sina(self):
+            calls.append("sina")
+            return pd.DataFrame(
+                [
+                    {
+                        "标题": "健康宏观来源",
+                        "发布时间": "2026-05-22 09:00:00",
+                        "来源": "新浪财经",
+                    }
+                ]
+            )
+
+        def stock_info_global_ths(self):
+            calls.append("ths")
+            return pd.DataFrame()
+
+        def stock_info_global_cls(self, symbol="全部"):
+            calls.append("cls")
+            return pd.DataFrame()
+
+        def news_cctv(self, date):
+            calls.append(f"cctv:{date}")
+            return pd.DataFrame()
+
+    monkeypatch.setattr(akshare, "_ak", lambda: FlakyMacroAkShare())
+    monkeypatch.setattr(akshare, "_is_historical_macro_news_date", lambda end_date: False)
+    monkeypatch.setattr(akshare, "_MACRO_NEWS_TOTAL_BUDGET_SECONDS", 1)
+    monkeypatch.setattr(akshare, "_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(akshare, "_MACRO_NEWS_SOURCE_COOLDOWN_SECONDS", 60)
+
+    first = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
+    second = akshare.get_global_news("2026-05-22", look_back_days=1, limit=5)
+
+    assert "健康宏观来源" in first
+    assert "健康宏观来源" in second
+    assert calls.count("eastmoney") == 1
+    assert calls.count("sina") == 2
 
 
 def test_load_index_ohlcv_uses_akshare_index_symbol(monkeypatch):

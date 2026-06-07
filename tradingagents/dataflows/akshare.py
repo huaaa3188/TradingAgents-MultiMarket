@@ -1,6 +1,7 @@
 from datetime import datetime
 import queue
 import threading
+import time
 from typing import Optional
 
 import pandas as pd
@@ -24,7 +25,10 @@ from diskcache import Cache
 
 _UNINITIALIZED_CACHE = object()
 cache = _UNINITIALIZED_CACHE
+_MACRO_NEWS_TOTAL_BUDGET_SECONDS = 15
 _MACRO_NEWS_SOURCE_TIMEOUT_SECONDS = 12
+_MACRO_NEWS_SOURCE_COOLDOWN_SECONDS = 60 * 60
+_macro_news_source_health: dict[str, float] = {}
 
 
 def _get_cache():
@@ -617,13 +621,34 @@ def _filter_fund_announcements(
 def _collect_china_macro_news(ak, start_date: str, end_date: str, limit: int) -> pd.DataFrame:
     frames = []
     errors = []
+    deadline = time.monotonic() + _MACRO_NEWS_TOTAL_BUDGET_SECONDS
 
     for source_name, loader in _china_macro_news_loaders(ak, start_date, end_date):
+        remaining = _macro_news_budget_remaining(deadline)
+        if remaining <= 0:
+            errors.append(
+                f"macro news budget exhausted after {_MACRO_NEWS_TOTAL_BUDGET_SECONDS} seconds"
+            )
+            break
+
+        if _is_macro_news_source_in_cooldown(source_name):
+            errors.append(f"{source_name}: skipped due to recent timeout")
+            continue
+
         try:
-            data = _call_macro_news_loader(source_name, loader)
+            data = _call_macro_news_loader(
+                source_name,
+                loader,
+                timeout_seconds=min(_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS, remaining),
+            )
+        except TimeoutError as exc:
+            _mark_macro_news_source_timeout(source_name)
+            errors.append(f"{source_name}: {exc}")
+            continue
         except Exception as exc:
             errors.append(f"{source_name}: {exc}")
             continue
+        _mark_macro_news_source_success(source_name)
         normalized = _normalize_news_frame(data, source_name)
         if not normalized.empty:
             frames.append(normalized)
@@ -661,7 +686,7 @@ def _china_macro_news_loaders(ak, start_date: str, end_date: str):
         yield (f"CCTV News {date_value}", lambda date_value=date_value: ak.news_cctv(date=date_value))
 
 
-def _call_macro_news_loader(source_name: str, loader):
+def _call_macro_news_loader(source_name: str, loader, timeout_seconds: float):
     result_queue = queue.Queue(maxsize=1)
 
     def run_loader():
@@ -676,16 +701,80 @@ def _call_macro_news_loader(source_name: str, loader):
         daemon=True,
     )
     thread.start()
-    thread.join(_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS)
+    thread.join(max(timeout_seconds, 0))
     if thread.is_alive():
         raise TimeoutError(
-            f"{source_name} did not return within {_MACRO_NEWS_SOURCE_TIMEOUT_SECONDS} seconds"
+            f"{source_name} did not return within {timeout_seconds:.2f} seconds"
         )
 
     status, value = result_queue.get_nowait()
     if status == "error":
         raise value
     return value
+
+
+def _macro_news_budget_remaining(deadline: float) -> float:
+    return deadline - time.monotonic()
+
+
+def _is_macro_news_source_in_cooldown(source_name: str) -> bool:
+    now = time.time()
+    disabled_until = _get_macro_news_disabled_until(source_name)
+    if disabled_until is None:
+        return False
+    if disabled_until <= now:
+        _clear_macro_news_source_health(source_name)
+        return False
+    return True
+
+
+def _get_macro_news_disabled_until(source_name: str) -> Optional[float]:
+    active_cache = _get_cache()
+    key = _macro_news_source_health_key(source_name)
+    if active_cache is not None:
+        try:
+            value = active_cache.get(key)
+            if value is not None:
+                return float(value)
+        except Exception as exc:
+            print(f"[Warning] DiskCache read failure for {key}: {exc}", file=sys.stderr)
+    return _macro_news_source_health.get(source_name)
+
+
+def _clear_macro_news_source_health(source_name: str) -> None:
+    active_cache = _get_cache()
+    key = _macro_news_source_health_key(source_name)
+    if active_cache is not None:
+        try:
+            active_cache.delete(key)
+        except Exception as exc:
+            print(f"[Warning] DiskCache delete failure for {key}: {exc}", file=sys.stderr)
+    _macro_news_source_health.pop(source_name, None)
+
+
+def _mark_macro_news_source_timeout(source_name: str) -> None:
+    disabled_until = time.time() + _MACRO_NEWS_SOURCE_COOLDOWN_SECONDS
+    _macro_news_source_health[source_name] = disabled_until
+    active_cache = _get_cache()
+    if active_cache is None:
+        return
+    key = _macro_news_source_health_key(source_name)
+    try:
+        active_cache.set(
+            key,
+            disabled_until,
+            expire=_MACRO_NEWS_SOURCE_COOLDOWN_SECONDS,
+        )
+    except Exception as exc:
+        print(f"[Warning] DiskCache write failure for {key}: {exc}", file=sys.stderr)
+
+
+def _mark_macro_news_source_success(source_name: str) -> None:
+    _clear_macro_news_source_health(source_name)
+
+
+def _macro_news_source_health_key(source_name: str) -> str:
+    return f"macro_news_source_disabled:{source_name}"
 
 
 def _is_historical_macro_news_date(end_date: str) -> bool:
