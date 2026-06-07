@@ -1,13 +1,23 @@
 import pandas as pd
 import pytest
 import requests
+from diskcache import Cache
 
+import tradingagents.default_config as default_config
 from tradingagents.dataflows import akshare, tiantian_fund
+from tradingagents.dataflows import cache as dataflow_cache
+from tradingagents.dataflows.config import set_config
 
 
 @pytest.fixture(autouse=True)
-def disable_akshare_cache(monkeypatch):
-    monkeypatch.setattr(akshare, "cache", None)
+def isolate_dataflow_cache(tmp_path):
+    set_config(default_config.DEFAULT_CONFIG.copy())
+    dataflow_cache.set_disk_cache("akshare", Cache(str(tmp_path / "akshare_cache")))
+    dataflow_cache.set_disk_cache("tiantian_fund", Cache(str(tmp_path / "tiantian_cache")))
+    yield
+    dataflow_cache.clear_disk_cache("akshare")
+    dataflow_cache.clear_disk_cache("tiantian_fund")
+    set_config(default_config.DEFAULT_CONFIG.copy())
 
 
 class FakeResponse:
@@ -103,6 +113,55 @@ def test_tiantian_fund_nav_history_returns_ohlcv_shape(monkeypatch):
     assert data["Open"].tolist() == [3.22, 3.24]
     assert data["Volume"].tolist() == [0, 0]
     assert data["Pct Change"].tolist() == [0.2, 0.3]
+
+
+def test_tiantian_fund_profile_tables_use_disk_cache(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, **kwargs):
+        calls.append((url, params))
+        if "pingzhongdata" in url:
+            return FakeResponse(_detail_script())
+        return FakeResponse(_holdings_response("2026-03-31"))
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    first = tiantian_fund.get_fund_profile_tables("510300", "2026-05-22", holdings_limit=2)
+    assert len(calls) == 2
+
+    def fail_get(url, params=None, **kwargs):
+        raise AssertionError("network should not be called after cache is warm")
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fail_get)
+
+    second = tiantian_fund.get_fund_profile_tables("510300", "2026-05-22", holdings_limit=2)
+
+    assert [table.title for table in second] == [table.title for table in first]
+    assert second[0].data.loc[0, "内容"] == "510300"
+    assert len(calls) == 2
+
+
+def test_tiantian_fund_nav_history_uses_disk_cache(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, **kwargs):
+        calls.append((url, params))
+        return FakeResponse(_detail_script())
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    first = tiantian_fund.get_fund_nav_history("012920", "2026-05-21", "2026-05-22")
+    assert len(calls) == 1
+
+    def fail_get(url, params=None, **kwargs):
+        raise AssertionError("network should not be called after cache is warm")
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fail_get)
+
+    second = tiantian_fund.get_fund_nav_history("012920", "2026-05-21", "2026-05-22")
+
+    pd.testing.assert_frame_equal(first, second)
+    assert len(calls) == 1
 
 
 def test_akshare_fund_profile_includes_tiantian_enrichment(monkeypatch):

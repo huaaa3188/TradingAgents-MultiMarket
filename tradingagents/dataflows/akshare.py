@@ -7,6 +7,7 @@ from typing import Optional
 import pandas as pd
 from stockstats import wrap
 
+from .cache import disk_cache, get_disk_cache
 from .config import get_config
 from .instruments import (
     InstrumentType,
@@ -19,12 +20,8 @@ from .instruments import (
 from .tiantian_fund import get_fund_nav_history, get_fund_profile_tables
 
 
-import functools
 import sys
-from diskcache import Cache
 
-_UNINITIALIZED_CACHE = object()
-cache = _UNINITIALIZED_CACHE
 _MACRO_NEWS_TOTAL_BUDGET_SECONDS = 15
 _MACRO_NEWS_SOURCE_TIMEOUT_SECONDS = 12
 _MACRO_NEWS_SOURCE_COOLDOWN_SECONDS = 60 * 60
@@ -32,48 +29,12 @@ _macro_news_source_health: dict[str, float] = {}
 
 
 def _get_cache():
-    global cache
-    if cache is _UNINITIALIZED_CACHE:
-        cache_dir = f"{get_config()['data_cache_dir']}/akshare"
-        try:
-            cache = Cache(cache_dir)
-        except Exception as exc:
-            print(f"[Warning] Failed to initialize DiskCache at {cache_dir}: {exc}", file=sys.stderr)
-            cache = None
-    return cache
+    return get_disk_cache("akshare")
 
 
 def akshare_disk_cache(expire=14400):  # 默认缓存 4 小时 (14400 秒)
-    """通用本地磁盘缓存装饰器，带高可用灾备穿透"""
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            if not get_config().get("enable_data_cache", True):
-                return func(*args, **kwargs)
-
-            active_cache = _get_cache()
-            if active_cache is None:
-                return func(*args, **kwargs)
-
-            # 将函数名和参数组合序列化，作为唯一的 Cache Key
-            key = f"disk:{func.__name__}:{args}:{sorted(kwargs.items())}"
-            try:
-                cached_val = active_cache.get(key)
-                if cached_val is not None:
-                    return cached_val
-            except Exception as exc:
-                # 磁盘读写异常时，优雅降级，直接穿透调用真实 API
-                print(f"[Warning] DiskCache read failure for {func.__name__}: {exc}", file=sys.stderr)
-
-            val = func(*args, **kwargs)
-
-            try:
-                active_cache.set(key, val, expire=expire)
-            except Exception as exc:
-                print(f"[Warning] DiskCache write failure for {func.__name__}: {exc}", file=sys.stderr)
-            return val
-        return wrapper
-    return decorator
+    """AkShare namespace wrapper over the shared dataflow disk cache."""
+    return disk_cache("akshare", expire=expire)
 
 
 class AkShareDataError(RuntimeError):

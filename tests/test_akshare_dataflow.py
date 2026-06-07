@@ -2,9 +2,11 @@ import time
 
 import pandas as pd
 import pytest
+from diskcache import Cache
 
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import akshare, tiantian_fund
+from tradingagents.dataflows import cache as dataflow_cache
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.interface import route_to_vendor
 
@@ -18,12 +20,14 @@ def reset_dataflow_config():
 
 @pytest.fixture(autouse=True)
 def isolate_akshare_cache(monkeypatch, tmp_path):
-    from diskcache import Cache
     temp_cache = Cache(str(tmp_path / "test_akshare_cache"))
-    monkeypatch.setattr(akshare, "cache", temp_cache)
+    dataflow_cache.set_disk_cache("akshare", temp_cache)
+    dataflow_cache.set_disk_cache("tiantian_fund", Cache(str(tmp_path / "test_tiantian_cache")))
     monkeypatch.setattr(akshare, "get_fund_profile_tables", lambda symbol, curr_date: [])
     akshare._macro_news_source_health.clear()
     yield
+    dataflow_cache.clear_disk_cache("akshare")
+    dataflow_cache.clear_disk_cache("tiantian_fund")
     akshare._macro_news_source_health.clear()
 
 
@@ -794,12 +798,11 @@ def _statement_frame():
 
 
 def test_akshare_disk_cache_behavior(tmp_path, monkeypatch):
-    from diskcache import Cache
     from tradingagents.dataflows import akshare
 
     # 1. 实例化一个临时隔离的 Cache，并替换全局全局对象
     temp_cache = Cache(str(tmp_path))
-    monkeypatch.setattr(akshare, "cache", temp_cache)
+    dataflow_cache.set_disk_cache("akshare", temp_cache)
 
     # 2. Mock 真正的底层 _load_ohlcv 数据源
     load_count = 0
@@ -829,7 +832,7 @@ def test_akshare_disk_cache_graceful_fallback(monkeypatch):
     from tradingagents.dataflows import akshare
 
     # 1. 模拟缓存不可用（如宕机或损坏为 None）
-    monkeypatch.setattr(akshare, "cache", None)
+    dataflow_cache.set_disk_cache("akshare", None)
 
     # 2. Mock 正常的数据底层加载
     load_count = 0
@@ -865,8 +868,8 @@ def test_akshare_cache_lazy_loads_under_configured_cache_dir(monkeypatch, tmp_pa
 
     custom_cache_dir = tmp_path / "configured-cache"
     set_config({"data_cache_dir": str(custom_cache_dir)})
-    monkeypatch.setattr(akshare, "cache", akshare._UNINITIALIZED_CACHE)
-    monkeypatch.setattr(akshare, "Cache", FakeCache)
+    dataflow_cache.clear_disk_cache("akshare")
+    monkeypatch.setattr(dataflow_cache, "Cache", FakeCache)
     monkeypatch.setattr(akshare, "_load_ohlcv", lambda symbol, start, end: _ohlcv_frame())
 
     result = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
@@ -908,12 +911,11 @@ def test_bj_stock_routing_and_prefixes(monkeypatch):
 
 
 def test_akshare_get_display_name_cached(monkeypatch, tmp_path):
-    from diskcache import Cache
     from tradingagents.dataflows import akshare
 
     # 1. 实例化一个临时隔离的 Cache
     temp_cache = Cache(str(tmp_path / "test_display_cache"))
-    monkeypatch.setattr(akshare, "cache", temp_cache)
+    dataflow_cache.set_disk_cache("akshare", temp_cache)
 
     # 2. 验证海外标的直接降级返回自身
     assert akshare.get_ticker_display_name("AAPL") == "AAPL"
@@ -966,14 +968,12 @@ def test_akshare_get_display_name_cached(monkeypatch, tmp_path):
 
 
 def test_akshare_disk_cache_disabled_by_config(tmp_path, monkeypatch):
-    from diskcache import Cache
     from tradingagents.dataflows import akshare
     from tradingagents.dataflows.config import set_config
-    import tradingagents.default_config as default_config
 
     # 1. 实例化一个临时隔离的 Cache 并绑定
     temp_cache = Cache(str(tmp_path / "test_disable_cache"))
-    monkeypatch.setattr(akshare, "cache", temp_cache)
+    dataflow_cache.set_disk_cache("akshare", temp_cache)
 
     # 2. Mock 底层 _load_ohlcv
     load_count = 0

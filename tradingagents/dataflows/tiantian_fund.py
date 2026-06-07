@@ -10,6 +10,8 @@ import pandas as pd
 import requests
 from parsel import Selector
 
+from .cache import disk_cache
+
 
 DETAIL_URL = "https://fund.eastmoney.com/pingzhongdata/{symbol}.js"
 HOLDINGS_URL = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
@@ -27,6 +29,7 @@ class TiantianTable:
     max_rows: int = 12
 
 
+@disk_cache("tiantian_fund", expire=86400)
 def get_fund_profile_tables(
     symbol: str,
     curr_date: Optional[str] = None,
@@ -46,6 +49,7 @@ def get_fund_profile_tables(
     return non_empty_tables
 
 
+@disk_cache("tiantian_fund", expire=14400)
 def get_fund_nav_history(
     symbol: str,
     start_date: Optional[str] = None,
