@@ -126,3 +126,35 @@ def test_render_markdown_contains_matrix_rows():
 
     assert "# China Market Localization Acceptance Matrix" in markdown
     assert "| 600519 | A-share equity | 600519.SH | cn_a | equity | route_price | OK |" in markdown
+
+
+def test_render_markdown_contains_cache_stats():
+    result = smoke.SmokeResult(
+        symbol="600519",
+        label="A-share equity",
+        normalized="600519.SH",
+        market="cn_a",
+        instrument="equity",
+        capability="route_price",
+        status=smoke.STATUS_OK,
+        detail="required marker(s) present",
+    )
+
+    markdown = smoke.render_markdown(
+        [result],
+        "2026-05-22",
+        10,
+        {
+            "akshare": {
+                "get_stock": {
+                    "hits": 1,
+                    "misses": 2,
+                    "writes": 2,
+                }
+            },
+            "tiantian_fund": {},
+        },
+    )
+
+    assert "## Dataflow Cache Stats" in markdown
+    assert "| akshare | get_stock | 1 | 2 | 2 | 0 | 0 | 0 | 0 |" in markdown

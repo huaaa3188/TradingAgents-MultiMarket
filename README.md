@@ -185,6 +185,17 @@ TradingAgents works with any market Yahoo Finance covers, using the exchange-suf
 
 For mainland China tickers, the CLI and Python entry point default the data vendor chain to `akshare` when the run has not explicitly configured another vendor. AkShare supplies A-share and listed-fund OHLCV, technical indicators, announcements, China macro/policy news, and fallback fund data. Listed-fund and OTC-fund fundamentals are additionally enriched from Tiantian Fund / Eastmoney with NAV trend, returns, scale, asset allocation, holder structure, manager, and top-holding tables, filtered to the analysis date. OTC funds are not treated as listed companies or exchange-traded securities: reports should not infer company revenue, balance-sheet, cash-flow, intraday volume, or premium/discount unless a tool explicitly provides that data.
 
+China-market operational notes:
+
+- Direct `tradingagents.dataflows.interface.route_to_vendor(...)` calls still use the configured vendor chain. For standalone dataflow calls, set `data_vendors.*` or `tool_vendors.*` to `akshare` explicitly; the automatic China default is applied by the CLI and `TradingAgentsGraph` run path.
+- China OTC fund price data is daily NAV shaped for tool compatibility. Volume-derived indicators, intraday liquidity, and exchange premium/discount are not valid unless another tool explicitly provides those fields.
+- Run the live acceptance matrix outside default CI when validating a release candidate:
+  ```bash
+  TRADINGAGENTS_CACHE_DIR=/private/tmp/tradingagents-china-smoke-cache \
+    .venv/bin/python scripts/smoke_akshare_live.py --end-date 2026-05-22 --matrix-out /private/tmp/china_market_matrix_2026-05-22.md
+  ```
+  Use a new temporary cache directory for cold-cache release validation. The matrix includes AkShare and Tiantian Fund cache hit/miss/write counters so you can distinguish live fetches from warm-cache reads.
+
 <p align="center">
   <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import tradingagents.default_config as default_config
+from tradingagents.dataflows import cache as dataflow_cache
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.instruments import (
     InstrumentType,
@@ -36,6 +37,7 @@ from tradingagents.graph.propagation import Propagator
 
 STATUS_OK = "OK"
 STATUS_FAIL = "FAIL"
+CHINA_CACHE_NAMESPACES = ("akshare", "tiantian_fund")
 
 DEFAULT_TARGETS = ("600519", "000001", "510300", "159915", "012920")
 DEFAULT_QDII_CANDIDATES = ("012920",)
@@ -420,7 +422,19 @@ def _escape_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ")
 
 
-def render_markdown(results: Sequence[SmokeResult], end_date: str, lookback_days: int) -> str:
+def collect_cache_stats() -> dict[str, dict[str, dict[str, int]]]:
+    return {
+        namespace: dataflow_cache.get_cache_stats(namespace)
+        for namespace in CHINA_CACHE_NAMESPACES
+    }
+
+
+def render_markdown(
+    results: Sequence[SmokeResult],
+    end_date: str,
+    lookback_days: int,
+    cache_stats: dict[str, dict[str, dict[str, int]]] | None = None,
+) -> str:
     lines = [
         "# China Market Localization Acceptance Matrix",
         "",
@@ -449,6 +463,7 @@ def render_markdown(results: Sequence[SmokeResult], end_date: str, lookback_days
             )
             + " |"
         )
+    lines.extend(_render_cache_stats_markdown(cache_stats))
     lines.extend(
         [
             "",
@@ -461,7 +476,48 @@ def render_markdown(results: Sequence[SmokeResult], end_date: str, lookback_days
     return "\n".join(lines) + "\n"
 
 
-def print_results(results: Sequence[SmokeResult]) -> None:
+def _render_cache_stats_markdown(cache_stats: dict[str, dict[str, dict[str, int]]] | None) -> list[str]:
+    if cache_stats is None:
+        return []
+    lines = [
+        "",
+        "## Dataflow Cache Stats",
+        "",
+        "| Namespace | Function | Hits | Misses | Writes | Disabled | Unavailable | Read Errors | Write Errors |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    rows = []
+    for namespace in CHINA_CACHE_NAMESPACES:
+        functions = cache_stats.get(namespace) or {}
+        for func_name, counters in sorted(functions.items()):
+            rows.append(
+                "| "
+                + " | ".join(
+                    [
+                        namespace,
+                        func_name,
+                        str(counters.get("hits", 0)),
+                        str(counters.get("misses", 0)),
+                        str(counters.get("writes", 0)),
+                        str(counters.get("disabled", 0)),
+                        str(counters.get("unavailable", 0)),
+                        str(counters.get("read_errors", 0)),
+                        str(counters.get("write_errors", 0)),
+                    ]
+                )
+                + " |"
+            )
+    if rows:
+        lines.extend(rows)
+    else:
+        lines.append("| none | none | 0 | 0 | 0 | 0 | 0 | 0 | 0 |")
+    return lines
+
+
+def print_results(
+    results: Sequence[SmokeResult],
+    cache_stats: dict[str, dict[str, dict[str, int]]] | None = None,
+) -> None:
     print("\nChina market localization acceptance matrix")
     print("=" * 100)
     for result in results:
@@ -469,6 +525,25 @@ def print_results(results: Sequence[SmokeResult]) -> None:
             f"{result.status:<4} {result.symbol:<8} {result.normalized:<10} "
             f"{result.market:<8} {result.instrument:<8} {result.capability:<18} {result.detail}"
         )
+    if cache_stats is not None:
+        print("\nDataflow cache stats")
+        print("=" * 100)
+        printed = False
+        for namespace in CHINA_CACHE_NAMESPACES:
+            for func_name, counters in sorted((cache_stats.get(namespace) or {}).items()):
+                printed = True
+                print(
+                    f"{namespace:<14} {func_name:<30} "
+                    f"hits={counters.get('hits', 0)} "
+                    f"misses={counters.get('misses', 0)} "
+                    f"writes={counters.get('writes', 0)} "
+                    f"disabled={counters.get('disabled', 0)} "
+                    f"unavailable={counters.get('unavailable', 0)} "
+                    f"read_errors={counters.get('read_errors', 0)} "
+                    f"write_errors={counters.get('write_errors', 0)}"
+                )
+        if not printed:
+            print("No dataflow cache activity recorded.")
 
 
 def _parse_symbols(raw: str | None, fallback: Iterable[str]) -> tuple[str, ...]:
@@ -499,6 +574,7 @@ def main() -> int:
     symbols = _parse_symbols(args.symbols, DEFAULT_TARGETS)
     qdii_symbols = _parse_symbols(args.qdii_symbols, DEFAULT_QDII_CANDIDATES)
     targets = _build_targets(symbols, qdii_symbols)
+    dataflow_cache.reset_cache_stats()
     results = run_matrix(
         targets,
         args.end_date,
@@ -508,11 +584,15 @@ def main() -> int:
         include_snapshot=not args.skip_snapshot,
         include_graph_state=not args.skip_graph_state,
     )
-    print_results(results)
+    cache_stats = collect_cache_stats()
+    print_results(results, cache_stats)
 
     if args.matrix_out:
         output_path = Path(args.matrix_out)
-        output_path.write_text(render_markdown(results, args.end_date, args.lookback_days), encoding="utf-8")
+        output_path.write_text(
+            render_markdown(results, args.end_date, args.lookback_days, cache_stats),
+            encoding="utf-8",
+        )
         print(f"\nWrote matrix: {output_path}")
 
     failures = [result for result in results if result.status == STATUS_FAIL]
