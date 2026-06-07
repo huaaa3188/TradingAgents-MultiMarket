@@ -4,6 +4,7 @@ import functools
 import os
 import re
 import sys
+from collections import Counter
 from typing import Callable
 
 from diskcache import Cache
@@ -13,6 +14,7 @@ from .config import get_config
 
 _UNINITIALIZED_CACHE = object()
 _CACHES: dict[str, object] = {}
+_CACHE_STATS: dict[tuple[str, str], Counter] = {}
 _NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -51,6 +53,32 @@ def clear_disk_cache(namespace: str | None = None) -> None:
         _close_cache(cache_obj)
 
 
+def get_cache_stats(namespace: str | None = None) -> dict:
+    """Return in-process cache counters for diagnostics and tests."""
+    if namespace is not None:
+        _validate_namespace(namespace)
+        return {
+            func_name: dict(counter)
+            for (ns, func_name), counter in _CACHE_STATS.items()
+            if ns == namespace
+        }
+    stats: dict[str, dict[str, dict[str, int]]] = {}
+    for (ns, func_name), counter in _CACHE_STATS.items():
+        stats.setdefault(ns, {})[func_name] = dict(counter)
+    return stats
+
+
+def reset_cache_stats(namespace: str | None = None) -> None:
+    """Clear in-process cache counters."""
+    if namespace is not None:
+        _validate_namespace(namespace)
+        for key in list(_CACHE_STATS):
+            if key[0] == namespace:
+                _CACHE_STATS.pop(key, None)
+        return
+    _CACHE_STATS.clear()
+
+
 def disk_cache(namespace: str, expire: int = 14400) -> Callable:
     """Decorate dataflow fetchers with a shared fail-open DiskCache layer."""
     _validate_namespace(namespace)
@@ -59,25 +87,32 @@ def disk_cache(namespace: str, expire: int = 14400) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             if not get_config().get("enable_data_cache", True):
+                _record_cache_event(namespace, func.__name__, "disabled")
                 return func(*args, **kwargs)
 
             active_cache = get_disk_cache(namespace)
             if active_cache is None:
+                _record_cache_event(namespace, func.__name__, "unavailable")
                 return func(*args, **kwargs)
 
             key = _cache_key(func, args, kwargs)
             try:
                 cached_val = active_cache.get(key)
                 if cached_val is not None:
+                    _record_cache_event(namespace, func.__name__, "hits")
                     return cached_val
+                _record_cache_event(namespace, func.__name__, "misses")
             except Exception as exc:  # noqa: BLE001 - fall through to live fetch
+                _record_cache_event(namespace, func.__name__, "read_errors")
                 print(f"[Warning] DiskCache read failure for {func.__name__}: {exc}", file=sys.stderr)
 
             val = func(*args, **kwargs)
 
             try:
                 active_cache.set(key, val, expire=expire)
+                _record_cache_event(namespace, func.__name__, "writes")
             except Exception as exc:  # noqa: BLE001 - fetched data is still usable
+                _record_cache_event(namespace, func.__name__, "write_errors")
                 print(f"[Warning] DiskCache write failure for {func.__name__}: {exc}", file=sys.stderr)
             return val
 
@@ -88,6 +123,10 @@ def disk_cache(namespace: str, expire: int = 14400) -> Callable:
 
 def _cache_key(func, args, kwargs) -> str:
     return f"disk:{func.__name__}:{args}:{sorted(kwargs.items())}"
+
+
+def _record_cache_event(namespace: str, func_name: str, event: str) -> None:
+    _CACHE_STATS.setdefault((namespace, func_name), Counter())[event] += 1
 
 
 def _validate_namespace(namespace: str) -> None:

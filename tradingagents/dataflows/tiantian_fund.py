@@ -173,10 +173,12 @@ def _parse_holdings_response(text: str, curr_date: Optional[str]) -> pd.DataFram
 
 
 def _overview_frame(values: dict[str, Any], symbol: str) -> pd.DataFrame:
-    rows = [
-        {"项目": "基金代码", "内容": values.get("fS_code") or symbol, "来源": "天天基金/东方财富"},
-        {"项目": "基金简称", "内容": values.get("fS_name") or "", "来源": "天天基金/东方财富"},
-    ]
+    has_source_value = any(value not in (None, "", [], {}) for value in values.values())
+    rows = []
+    if values.get("fS_code") or has_source_value:
+        rows.append({"项目": "基金代码", "内容": values.get("fS_code") or symbol, "来源": "天天基金/东方财富"})
+    if values.get("fS_name"):
+        rows.append({"项目": "基金简称", "内容": values.get("fS_name"), "来源": "天天基金/东方财富"})
     for key, label in (
         ("fund_sourceRate", "原费率"),
         ("fund_Rate", "现费率"),

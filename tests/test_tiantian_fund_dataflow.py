@@ -12,11 +12,13 @@ from tradingagents.dataflows.config import set_config
 @pytest.fixture(autouse=True)
 def isolate_dataflow_cache(tmp_path):
     set_config(default_config.DEFAULT_CONFIG.copy())
+    dataflow_cache.reset_cache_stats()
     dataflow_cache.set_disk_cache("akshare", Cache(str(tmp_path / "akshare_cache")))
     dataflow_cache.set_disk_cache("tiantian_fund", Cache(str(tmp_path / "tiantian_cache")))
     yield
     dataflow_cache.clear_disk_cache("akshare")
     dataflow_cache.clear_disk_cache("tiantian_fund")
+    dataflow_cache.reset_cache_stats()
     set_config(default_config.DEFAULT_CONFIG.copy())
 
 
@@ -115,6 +117,43 @@ def test_tiantian_fund_nav_history_returns_ohlcv_shape(monkeypatch):
     assert data["Pct Change"].tolist() == [0.2, 0.3]
 
 
+def test_tiantian_fund_profile_rejects_empty_detail_contract(monkeypatch):
+    def fake_get(url, params=None, **kwargs):
+        if "pingzhongdata" in url:
+            return FakeResponse("var unrelated_shape = {};")
+        return FakeResponse("var apidata={content:'',arryear:[2026]};")
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    with pytest.raises(tiantian_fund.TiantianFundDataError, match="No Tiantian Fund profile data returned"):
+        tiantian_fund.get_fund_profile_tables("510300", "2026-05-22", holdings_limit=2)
+
+
+def test_tiantian_fund_profile_ignores_drifted_holdings_shape(monkeypatch):
+    def fake_get(url, params=None, **kwargs):
+        if "pingzhongdata" in url:
+            return FakeResponse(_detail_script())
+        return FakeResponse(_drifted_holdings_response("2026-03-31"))
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    tables = tiantian_fund.get_fund_profile_tables("510300", "2026-05-22", holdings_limit=2)
+
+    by_title = {table.title: table.data for table in tables}
+    assert "Tiantian Fund Overview" in by_title
+    assert "Tiantian Fund Top Holdings" not in by_title
+
+
+def test_tiantian_fund_nav_history_rejects_missing_nav_trend(monkeypatch):
+    def fake_get(url, params=None, **kwargs):
+        return FakeResponse('var fS_name = "沪深300ETF华泰柏瑞"; var fS_code = "510300";')
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    with pytest.raises(tiantian_fund.TiantianFundDataError, match="No Tiantian Fund NAV data returned"):
+        tiantian_fund.get_fund_nav_history("510300", "2026-05-21", "2026-05-22")
+
+
 def test_tiantian_fund_profile_tables_use_disk_cache(monkeypatch):
     calls = []
 
@@ -139,6 +178,10 @@ def test_tiantian_fund_profile_tables_use_disk_cache(monkeypatch):
     assert [table.title for table in second] == [table.title for table in first]
     assert second[0].data.loc[0, "内容"] == "510300"
     assert len(calls) == 2
+    stats = dataflow_cache.get_cache_stats("tiantian_fund")["get_fund_profile_tables"]
+    assert stats["misses"] == 1
+    assert stats["writes"] == 1
+    assert stats["hits"] == 1
 
 
 def test_tiantian_fund_nav_history_uses_disk_cache(monkeypatch):
@@ -162,6 +205,10 @@ def test_tiantian_fund_nav_history_uses_disk_cache(monkeypatch):
 
     pd.testing.assert_frame_equal(first, second)
     assert len(calls) == 1
+    stats = dataflow_cache.get_cache_stats("tiantian_fund")["get_fund_nav_history"]
+    assert stats["misses"] == 1
+    assert stats["writes"] == 1
+    assert stats["hits"] == 1
 
 
 def test_akshare_fund_profile_includes_tiantian_enrichment(monkeypatch):
@@ -285,6 +332,15 @@ def _holdings_response(cutoff_date: str):
         "<td>4.27%</td><td>2,126.97</td><td>854,404.57</td></tr>"
         "<tr><td>2</td><td>600519</td><td>贵州茅台</td><td></td><td></td><td></td>"
         "<td>3.65%</td><td>503.85</td><td>730,579.89</td></tr>"
+        f"</tbody></table><label>来源：天天基金 截止至：<font>{cutoff_date}</font></label>"
+    )
+    return f'var apidata={{ content:"{content}",arryear:[2026]}};'
+
+
+def _drifted_holdings_response(cutoff_date: str):
+    content = (
+        "<table><tbody>"
+        "<tr><td>300750</td><td>宁德时代</td><td>4.27%</td></tr>"
         f"</tbody></table><label>来源：天天基金 截止至：<font>{cutoff_date}</font></label>"
     )
     return f'var apidata={{ content:"{content}",arryear:[2026]}};'

@@ -20,6 +20,7 @@ def reset_dataflow_config():
 
 @pytest.fixture(autouse=True)
 def isolate_akshare_cache(monkeypatch, tmp_path):
+    dataflow_cache.reset_cache_stats()
     temp_cache = Cache(str(tmp_path / "test_akshare_cache"))
     dataflow_cache.set_disk_cache("akshare", temp_cache)
     dataflow_cache.set_disk_cache("tiantian_fund", Cache(str(tmp_path / "test_tiantian_cache")))
@@ -28,6 +29,7 @@ def isolate_akshare_cache(monkeypatch, tmp_path):
     yield
     dataflow_cache.clear_disk_cache("akshare")
     dataflow_cache.clear_disk_cache("tiantian_fund")
+    dataflow_cache.reset_cache_stats()
     akshare._macro_news_source_health.clear()
 
 
@@ -171,6 +173,27 @@ def test_get_stock_falls_back_to_sina_equity_history(monkeypatch):
     assert "2026-01-03" in result
     assert fake.calls[1][0] == "stock_zh_a_daily"
     assert fake.calls[1][1]["symbol"] == "sh600519"
+
+
+def test_get_stock_falls_back_when_primary_ohlcv_shape_drifts(monkeypatch):
+    class FakeAkShareWithDriftedEastmoney(FakeAkShare):
+        def stock_zh_a_hist(self, **kwargs):
+            self.calls.append(("stock_zh_a_hist", kwargs))
+            return pd.DataFrame(
+                [
+                    {"日期": "2026-01-01", "开盘": 10, "最高": 11, "最低": 9, "成交量": 1000},
+                ]
+            )
+
+    fake = FakeAkShareWithDriftedEastmoney()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
+
+    assert "AkShare data for 600519.SH" in result
+    assert "2026-01-03" in result
+    assert fake.calls[0][0] == "stock_zh_a_hist"
+    assert fake.calls[1][0] == "stock_zh_a_daily"
 
 
 def test_get_stock_falls_back_to_sina_fund_history(monkeypatch):
@@ -828,6 +851,22 @@ def test_akshare_disk_cache_behavior(tmp_path, monkeypatch):
     assert "AkShare data for 600519.SH" in res2
 
 
+def test_akshare_disk_cache_records_hit_miss_stats(tmp_path, monkeypatch):
+    from tradingagents.dataflows import akshare
+
+    dataflow_cache.reset_cache_stats("akshare")
+    dataflow_cache.set_disk_cache("akshare", Cache(str(tmp_path / "stats_cache")))
+    monkeypatch.setattr(akshare, "_load_ohlcv", lambda symbol, start, end: _ohlcv_frame())
+
+    akshare.get_stock("600519", "2026-01-01", "2026-01-03")
+    akshare.get_stock("600519", "2026-01-01", "2026-01-03")
+
+    stats = dataflow_cache.get_cache_stats("akshare")["get_stock"]
+    assert stats["misses"] == 1
+    assert stats["writes"] == 1
+    assert stats["hits"] == 1
+
+
 def test_akshare_disk_cache_graceful_fallback(monkeypatch):
     from tradingagents.dataflows import akshare
 
@@ -992,3 +1031,6 @@ def test_akshare_disk_cache_disabled_by_config(tmp_path, monkeypatch):
     set_config({"enable_data_cache": False})
     akshare.get_stock("600519", "2026-01-01", "2026-01-03")
     assert load_count == 2
+
+    stats = dataflow_cache.get_cache_stats("akshare")["get_stock"]
+    assert stats["disabled"] == 1
