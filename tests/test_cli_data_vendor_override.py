@@ -12,12 +12,14 @@ def test_apply_data_vendor_override_updates_all_data_categories():
 
     cli_main._apply_data_vendor_override(config, " akshare, yfinance ")
 
-    assert config["data_vendors"] == {
+    expected_data_vendors = copy.deepcopy(DEFAULT_CONFIG["data_vendors"])
+    expected_data_vendors.update({
         "core_stock_apis": "akshare,yfinance",
         "technical_indicators": "akshare,yfinance",
         "fundamental_data": "akshare,yfinance",
         "news_data": "akshare,yfinance",
-    }
+    })
+    assert config["data_vendors"] == expected_data_vendors
 
 
 def test_apply_data_vendor_override_rejects_empty_value():
@@ -234,11 +236,13 @@ def test_analyze_command_defaults_china_fund_tickers_to_akshare_without_mutating
         "market_type": expected_market_type,
         "instrument_context": "instrument context",
     }
-    assert captured["config"]["data_vendors"] == {
+    expected_runtime_data_vendors = copy.deepcopy(default_data_vendors)
+    expected_runtime_data_vendors.update({
         "core_stock_apis": "akshare",
         "technical_indicators": "akshare",
         "fundamental_data": "akshare",
         "news_data": "akshare",
-    }
+    })
+    assert captured["config"]["data_vendors"] == expected_runtime_data_vendors
     assert config["data_vendors"] == default_data_vendors
     assert DEFAULT_CONFIG["data_vendors"] == default_data_vendors

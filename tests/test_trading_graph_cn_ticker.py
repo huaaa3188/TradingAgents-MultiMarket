@@ -5,6 +5,17 @@ from tradingagents.dataflows.config import get_config, set_config
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
+def _expected_china_runtime_data_vendors() -> dict:
+    data_vendors = dict(default_config.DEFAULT_CONFIG["data_vendors"])
+    data_vendors.update({
+        "core_stock_apis": "akshare",
+        "technical_indicators": "akshare",
+        "fundamental_data": "akshare",
+        "news_data": "akshare",
+    })
+    return data_vendors
+
+
 def test_initial_state_does_not_resolve_akshare_display_name_for_us_ticker(monkeypatch):
     from tradingagents.dataflows import akshare
     from tradingagents.graph.propagation import Propagator
@@ -79,12 +90,7 @@ def test_propagate_defaults_cn_a_runtime_vendors_to_akshare_without_leaking_conf
     result = TradingAgentsGraph.propagate(graph, "510300", "2026-01-03")
 
     assert result == ("state", "decision")
-    assert observed_configs[0]["data_vendors"] == {
-        "core_stock_apis": "akshare",
-        "technical_indicators": "akshare",
-        "fundamental_data": "akshare",
-        "news_data": "akshare",
-    }
+    assert observed_configs[0]["data_vendors"] == _expected_china_runtime_data_vendors()
     assert get_config()["data_vendors"] == default_config.DEFAULT_CONFIG["data_vendors"]
 
 
@@ -106,12 +112,7 @@ def test_propagate_defaults_cn_otc_fund_runtime_vendors_to_akshare_without_leaki
     result = TradingAgentsGraph.propagate(graph, "012920", "2026-06-04")
 
     assert result == ("state", "decision")
-    assert observed_configs[0]["data_vendors"] == {
-        "core_stock_apis": "akshare",
-        "technical_indicators": "akshare",
-        "fundamental_data": "akshare",
-        "news_data": "akshare",
-    }
+    assert observed_configs[0]["data_vendors"] == _expected_china_runtime_data_vendors()
     assert get_config()["data_vendors"] == default_config.DEFAULT_CONFIG["data_vendors"]
 
 

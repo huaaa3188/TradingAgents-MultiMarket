@@ -1,25 +1,36 @@
 # TradingAgents/graph/trading_graph.py
 
+import json
 import logging
 import os
-from pathlib import Path
-import json
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
-import yfinance as yf
 import pandas as pd
-
-logger = logging.getLogger(__name__)
-
+import yfinance as yf
 from langgraph.prebuilt import ToolNode
 
-from tradingagents.llm_clients import create_llm_client
-
-from tradingagents.agents import *
-from tradingagents.default_config import DEFAULT_CONFIG
+# Import the abstract tool methods from agent_utils
+from tradingagents.agents.utils.agent_utils import (
+    build_instrument_context,
+    get_balance_sheet,
+    get_cashflow,
+    get_fundamentals,
+    get_global_news,
+    get_income_statement,
+    get_indicators,
+    get_insider_transactions,
+    get_macro_indicators,
+    get_news,
+    get_prediction_markets,
+    get_stock_data,
+    get_verified_market_snapshot,
+    resolve_instrument_identity,
+)
 from tradingagents.agents.utils.memory import TradingMemoryLog
+from tradingagents.dataflows.config import get_config, set_config
 from tradingagents.dataflows.instruments import (
     MarketType,
     detect_instrument_type,
@@ -27,34 +38,17 @@ from tradingagents.dataflows.instruments import (
     normalize_ticker_symbol,
 )
 from tradingagents.dataflows.utils import safe_ticker_component
-from tradingagents.agents.utils.agent_states import (
-    AgentState,
-    InvestDebateState,
-    RiskDebateState,
-)
-from tradingagents.dataflows.config import get_config, set_config
-
-# Import the new abstract tool methods from agent_utils
-from tradingagents.agents.utils.agent_utils import (
-    build_instrument_context,
-    resolve_instrument_identity,
-    get_stock_data,
-    get_indicators,
-    get_fundamentals,
-    get_balance_sheet,
-    get_cashflow,
-    get_income_statement,
-    get_news,
-    get_insider_transactions,
-    get_global_news
-)
+from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.llm_clients import create_llm_client
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
-from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
+from .setup import GraphSetup
 from .signal_processing import SignalProcessor
+
+logger = logging.getLogger(__name__)
 
 
 class TradingAgentsGraph:
@@ -62,10 +56,10 @@ class TradingAgentsGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals"],
+        selected_analysts=("market", "social", "news", "fundamentals"),
         debug=False,
-        config: Dict[str, Any] = None,
-        callbacks: Optional[List] = None,
+        config: dict[str, Any] = None,
+        callbacks: list | None = None,
     ):
         """Initialize the trading agents graph and components.
 
@@ -108,7 +102,7 @@ class TradingAgentsGraph:
 
         self.deep_thinking_llm = deep_client.get_llm()
         self.quick_thinking_llm = quick_client.get_llm()
-        
+
         self.memory_log = TradingMemoryLog(self.config)
 
         # Create tool nodes
@@ -143,7 +137,7 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 
-    def _get_provider_kwargs(self) -> Dict[str, Any]:
+    def _get_provider_kwargs(self) -> dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
         kwargs = {}
         provider = self.config.get("llm_provider", "").lower()
@@ -172,7 +166,7 @@ class TradingAgentsGraph:
 
         return kwargs
 
-    def _create_tool_nodes(self) -> Dict[str, ToolNode]:
+    def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
         return {
             "market": ToolNode(
@@ -181,6 +175,10 @@ class TradingAgentsGraph:
                     get_stock_data,
                     # Technical indicators
                     get_indicators,
+                    # Deterministic verification snapshot (bound to the analyst
+                    # LLM and required by its prompt; must be executable here or
+                    # the call fails and the model reports it "unavailable").
+                    get_verified_market_snapshot,
                 ]
             ),
             "social": ToolNode(
@@ -195,6 +193,8 @@ class TradingAgentsGraph:
                     get_news,
                     get_global_news,
                     get_insider_transactions,
+                    get_macro_indicators,
+                    get_prediction_markets,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -256,7 +256,7 @@ class TradingAgentsGraph:
     def _fetch_returns(
         self, ticker: str, trade_date: str, holding_days: int = 5,
         benchmark: str = "SPY",
-    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+    ) -> tuple[float | None, float | None, int | None]:
         """Fetch raw and alpha return for ticker over holding_days from trade_date.
 
         ``benchmark`` is the index used as the alpha baseline (resolved by the
@@ -280,12 +280,17 @@ class TradingAgentsGraph:
         holding_days: int = 5,
         benchmark: str = "SPY",
     ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+        from tradingagents.dataflows.symbol_utils import normalize_symbol
+
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
+            # Normalize so the realized-return lookup hits the same instrument
+            # the analysis priced (e.g. XAUUSD -> GC=F) (#984). The benchmark is
+            # already a canonical Yahoo symbol from ``_resolve_benchmark``.
+            stock = yf.Ticker(normalize_symbol(ticker)).history(start=trade_date, end=end_str)
             bench = yf.Ticker(benchmark).history(start=trade_date, end=end_str)
 
             return TradingAgentsGraph._returns_from_price_frames(

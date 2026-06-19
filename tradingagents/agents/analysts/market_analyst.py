@@ -1,13 +1,13 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
 from tradingagents.agents.utils.agent_utils import (
     append_fund_semantic_warning,
-    get_instrument_context_from_state,
     get_indicators,
+    get_instrument_context_from_state,
     get_language_instruction,
     get_stock_data,
     get_verified_market_snapshot,
 )
-from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.instruments import MarketType
 
 

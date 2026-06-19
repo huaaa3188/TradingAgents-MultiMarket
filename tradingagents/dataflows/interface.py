@@ -1,45 +1,49 @@
-from typing import Annotated
+import logging
 
-# Import from vendor-specific modules
-from .y_finance import (
-    get_YFin_data_online,
-    get_stock_stats_indicators_window,
-    get_fundamentals as get_yfinance_fundamentals,
-    get_balance_sheet as get_yfinance_balance_sheet,
-    get_cashflow as get_yfinance_cashflow,
-    get_income_statement as get_yfinance_income_statement,
-    get_insider_transactions as get_yfinance_insider_transactions,
-)
-from .yfinance_news import get_news_yfinance, get_global_news_yfinance
 from .alpha_vantage import (
-    get_stock as get_alpha_vantage_stock,
-    get_indicator as get_alpha_vantage_indicator,
-    get_fundamentals as get_alpha_vantage_fundamentals,
     get_balance_sheet as get_alpha_vantage_balance_sheet,
     get_cashflow as get_alpha_vantage_cashflow,
+    get_fundamentals as get_alpha_vantage_fundamentals,
+    get_global_news as get_alpha_vantage_global_news,
     get_income_statement as get_alpha_vantage_income_statement,
+    get_indicator as get_alpha_vantage_indicator,
     get_insider_transactions as get_alpha_vantage_insider_transactions,
     get_news as get_alpha_vantage_news,
-    get_global_news as get_alpha_vantage_global_news,
+    get_stock as get_alpha_vantage_stock,
 )
-from .alpha_vantage_common import AlphaVantageRateLimitError
 from .akshare import (
     AkShareDataError,
-    get_stock as get_akshare_stock,
-    get_indicator as get_akshare_indicator,
-    get_fundamentals as get_akshare_fundamentals,
     get_balance_sheet as get_akshare_balance_sheet,
     get_cashflow as get_akshare_cashflow,
+    get_fundamentals as get_akshare_fundamentals,
+    get_global_news as get_akshare_global_news,
+    get_indicator as get_akshare_indicator,
     get_income_statement as get_akshare_income_statement,
     get_insider_transactions as get_akshare_insider_transactions,
     get_news as get_akshare_news,
-    get_global_news as get_akshare_global_news,
+    get_stock as get_akshare_stock,
 )
-from .instruments import MarketType, detect_market_type, normalize_ticker_symbol
-from .symbol_utils import NoMarketDataError
-
-# Configuration and routing logic
 from .config import get_config
+from .errors import (
+    NoMarketDataError,
+    VendorNotConfiguredError,
+    VendorRateLimitError,
+)
+from .fred import get_macro_data as get_fred_macro_data
+from .instruments import MarketType, detect_market_type, normalize_ticker_symbol
+from .polymarket import get_prediction_markets as get_polymarket_prediction_markets
+from .y_finance import (
+    get_balance_sheet as get_yfinance_balance_sheet,
+    get_cashflow as get_yfinance_cashflow,
+    get_fundamentals as get_yfinance_fundamentals,
+    get_income_statement as get_yfinance_income_statement,
+    get_insider_transactions as get_yfinance_insider_transactions,
+    get_stock_stats_indicators_window,
+    get_YFin_data_online,
+)
+from .yfinance_news import get_global_news_yfinance, get_news_yfinance
+
+logger = logging.getLogger(__name__)
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
@@ -71,11 +75,25 @@ TOOLS_CATEGORIES = {
             "get_global_news",
             "get_insider_transactions",
         ]
+    },
+    "macro_data": {
+        "description": "Macroeconomic indicators (rates, inflation, labor, growth)",
+        "tools": [
+            "get_macro_indicators",
+        ]
+    },
+    "prediction_markets": {
+        "description": "Market-implied probabilities for forward-looking events",
+        "tools": [
+            "get_prediction_markets",
+        ]
     }
 }
 
 VENDOR_LIST = [
     "yfinance",
+    "fred",
+    "polymarket",
     "alpha_vantage",
     "akshare",
 ]
@@ -151,6 +169,14 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
     },
+    # macro_data
+    "get_macro_indicators": {
+        "fred": get_fred_macro_data,
+    },
+    # prediction_markets
+    "get_prediction_markets": {
+        "polymarket": get_polymarket_prediction_markets,
+    },
 }
 
 def get_category_for_method(method: str) -> str:
@@ -184,50 +210,61 @@ def route_to_vendor(method: str, *args, **kwargs):
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
 
-    # Build fallback chain: primary vendors first, then remaining available vendors
     all_available_vendors = list(VENDOR_METHODS[method].keys())
-    fallback_vendors = primary_vendors.copy()
-    for vendor in all_available_vendors:
-        if vendor not in fallback_vendors:
-            fallback_vendors.append(vendor)
+
+    # The configured vendor list IS the chain: we do NOT silently fall back to
+    # vendors the user did not choose (#988/#289) — that returned data from an
+    # unexpected source and caused cross-vendor inconsistencies. For multi-vendor
+    # fallback, list them in order, e.g. data_vendors="yfinance,alpha_vantage".
+    # The "default" sentinel (no explicit config) uses all available vendors.
+    explicit = [v for v in primary_vendors if v and v != "default"]
+    if explicit:
+        vendor_chain = [v for v in explicit if v in VENDOR_METHODS[method]]
+        if not vendor_chain:
+            raise ValueError(
+                f"Configured vendor(s) {explicit} not available for '{method}'. "
+                f"Available: {all_available_vendors}."
+            )
+    else:
+        vendor_chain = all_available_vendors
 
     ticker = _get_method_ticker(method, args)
     market_type = detect_market_type(ticker) if ticker else None
     compatible_vendors = MARKET_VENDOR_SUPPORT.get(market_type)
     if compatible_vendors is not None:
-        explicit_compatible_vendors = [vendor for vendor in primary_vendors if vendor in compatible_vendors]
-        if explicit_compatible_vendors:
-            fallback_vendors = [vendor for vendor in fallback_vendors if vendor in compatible_vendors]
-        else:
-            fallback_vendors = []
+        explicit_compatible_vendors = [vendor for vendor in vendor_chain if vendor in compatible_vendors]
+        vendor_chain = explicit_compatible_vendors
     elif market_type is not None:
-        fallback_vendors = [
-            vendor for vendor in fallback_vendors if _vendor_supports_market(vendor, market_type)
+        vendor_chain = [
+            vendor for vendor in vendor_chain if _vendor_supports_market(vendor, market_type)
         ]
 
     recoverable_errors = []
     last_no_data: NoMarketDataError | None = None
     first_error: Exception | None = None
-    for vendor in fallback_vendors:
-        if vendor not in VENDOR_METHODS[method]:
-            continue
-
+    for vendor in vendor_chain:
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
             return impl_func(*args, **kwargs)
-        except (AlphaVantageRateLimitError, AkShareDataError) as exc:
+        except (VendorRateLimitError, AkShareDataError) as exc:
+            logger.warning("Vendor %r recoverable failure for %s: %s", vendor, method, exc)
             recoverable_errors.append(f"{vendor}: {exc}")
             continue  # Only recoverable vendor failures trigger fallback
+        except VendorNotConfiguredError as e:
+            logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)
+            if first_error is None:
+                first_error = e  # Surface it if no other vendor can serve the call.
+            continue
         except NoMarketDataError as e:
-            last_no_data = e  # No data here; another vendor may have it
+            last_no_data = e  # No data here; another configured vendor may have it
             continue
         except Exception as e:
-            # A fallback vendor failing for an incidental reason (e.g. no API
-            # key configured) must not crash the call when another vendor
-            # already determined the symbol simply has no data. Remember the
-            # first error so a genuine primary-vendor failure still surfaces.
+            # Don't let one vendor's failure crash the call when another can
+            # serve it, but never swallow silently: a broken primary must be
+            # visible in the logs (#989), not hidden behind a fallback's verdict.
+            logger.warning("Vendor %r failed for %s: %s", vendor, method, e)
             if first_error is None:
                 first_error = e
             continue
@@ -237,13 +274,24 @@ def route_to_vendor(method: str, *args, **kwargs):
     # empty string, so the agent reports "unavailable" instead of inventing a
     # value. This takes precedence over incidental fallback errors.
     if last_no_data is not None:
+        if first_error is not None:
+            # A vendor also hit a real error; surface it in logs so the no-data
+            # verdict can't hide a broken primary (network/auth/etc.).
+            logger.warning(
+                "Returning NO_DATA for %s, but a vendor errored earlier: %s",
+                method, first_error,
+            )
         sym = last_no_data.symbol
         canonical = last_no_data.canonical
         resolved = "" if canonical == sym else f" (resolved to '{canonical}')"
+        # Surface the typed error's detail (e.g. "latest row is 2025-06-11 ...
+        # stale") so the agent sees the specific reason — invalid symbol, no
+        # coverage, or stale data — not just a generic "unavailable".
+        reason = f" ({last_no_data.detail})" if last_no_data.detail else ""
         return (
-            f"NO_DATA_AVAILABLE: No market data found for '{sym}'{resolved} from "
-            f"any configured vendor. The symbol may be invalid, delisted, or not "
-            f"covered by Yahoo Finance / Alpha Vantage. Do not estimate or "
+            f"NO_DATA_AVAILABLE: No usable market data for '{sym}'{resolved} from "
+            f"any configured vendor{reason}. The symbol may be invalid, delisted, "
+            f"not covered, or the vendor returned stale data. Do not estimate or "
             f"fabricate values — report that data is unavailable for this symbol."
         )
 
