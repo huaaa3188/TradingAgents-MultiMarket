@@ -23,6 +23,11 @@ from typing import Iterable, Sequence
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import cache as dataflow_cache
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.akshare import (
+    get_fundamentals_result,
+    get_news_result,
+    get_stock_result,
+)
 from tradingagents.dataflows.instruments import (
     InstrumentType,
     MarketType,
@@ -249,6 +254,46 @@ def _check_identity(target: SmokeTarget, normalized: str) -> SmokeResult:
     return _result(target, normalized, "identity", STATUS_OK, observed)
 
 
+def _contract_part(name: str, result) -> tuple[bool, str]:
+    has_contract = bool(
+        getattr(result, "meta", None)
+        and result.meta.source
+        and result.meta.semantic
+        and result.meta.symbol
+    )
+    if not has_contract:
+        return False, f"{name}=missing_contract_fields"
+    if not result.ok and not (result.missing_reason or result.error_type):
+        return False, f"{name}=missing_diagnostic"
+    status = "ok" if result.ok else f"missing:{result.missing_reason or result.error_type}"
+    return True, (
+        f"{name}={status}; semantic={result.meta.semantic}; source={result.meta.source}; "
+        f"as_of={result.meta.as_of or 'n/a'}; rows={result.rows}; notices={len(result.notices)}"
+    )
+
+
+def _check_data_contract(
+    target: SmokeTarget,
+    normalized: str,
+    start_date: str,
+    end_date: str,
+) -> SmokeResult:
+    parts = [
+        _contract_part("price", get_stock_result(target.symbol, start_date, end_date)),
+        _contract_part("fundamentals", get_fundamentals_result(target.symbol, end_date)),
+        _contract_part("news", get_news_result(target.symbol, start_date, end_date)),
+    ]
+    ok = all(part_ok for part_ok, _ in parts)
+    detail = " | ".join(part_detail for _, part_detail in parts)
+    return _result(
+        target,
+        normalized,
+        "data_contract",
+        STATUS_OK if ok else STATUS_FAIL,
+        detail,
+    )
+
+
 def _check_graph_state(target: SmokeTarget, normalized: str, end_date: str) -> SmokeResult:
     state = Propagator().create_initial_state(normalized, end_date)
     expected_market = target.expected_market.value
@@ -335,6 +380,14 @@ def run_target_matrix(
                 route_to_vendor("get_news", target.symbol, start_date, end_date),
                 target.news_markers_any,
             ),
+        )
+    )
+    results.append(
+        _call_capability(
+            target,
+            normalized,
+            "data_contract",
+            lambda: _check_data_contract(target, normalized, start_date, end_date),
         )
     )
 

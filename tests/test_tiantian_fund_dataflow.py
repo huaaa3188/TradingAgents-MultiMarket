@@ -117,6 +117,21 @@ def test_tiantian_fund_nav_history_returns_ohlcv_shape(monkeypatch):
     assert data["Pct Change"].tolist() == [0.2, 0.3]
 
 
+def test_tiantian_fund_nav_history_result_marks_nav_semantic(monkeypatch):
+    def fake_get(url, params=None, **kwargs):
+        return FakeResponse(_detail_script())
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    result = tiantian_fund.get_fund_nav_history_result("012920", "2026-05-21", "2026-05-22")
+
+    assert result.ok is True
+    assert result.meta.vendor == "tiantian_fund"
+    assert result.meta.semantic == "nav"
+    assert result.meta.as_of == "2026-05-22"
+    assert result.rows == 2
+
+
 def test_tiantian_fund_profile_rejects_empty_detail_contract(monkeypatch):
     def fake_get(url, params=None, **kwargs):
         if "pingzhongdata" in url:
@@ -127,6 +142,23 @@ def test_tiantian_fund_profile_rejects_empty_detail_contract(monkeypatch):
 
     with pytest.raises(tiantian_fund.TiantianFundDataError, match="No Tiantian Fund profile data returned"):
         tiantian_fund.get_fund_profile_tables("510300", "2026-05-22", holdings_limit=2)
+
+
+def test_tiantian_fund_profile_result_reports_source_error(monkeypatch):
+    def fake_get(url, params=None, **kwargs):
+        if "pingzhongdata" in url:
+            return FakeResponse("var unrelated_shape = {};")
+        return FakeResponse("var apidata={content:'',arryear:[2026]};")
+
+    monkeypatch.setattr(tiantian_fund.requests, "get", fake_get)
+
+    result = tiantian_fund.get_fund_profile_tables_result("510300", "2026-05-22", holdings_limit=2)
+
+    assert result.ok is False
+    assert result.meta.semantic == "fund_profile"
+    assert result.error_type == "source_error"
+    assert result.missing_reason == "no_profile_data"
+    assert any(notice.code == "source_error" for notice in result.notices)
 
 
 def test_tiantian_fund_profile_ignores_drifted_holdings_shape(monkeypatch):

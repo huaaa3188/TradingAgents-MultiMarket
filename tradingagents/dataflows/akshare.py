@@ -9,6 +9,13 @@ from stockstats import wrap
 
 from .cache import disk_cache, get_disk_cache
 from .config import get_config
+from .contracts import (
+    DataNotice,
+    DataResult,
+    SourceMeta,
+    data_notice,
+    render_notices,
+)
 from .instruments import (
     InstrumentType,
     detect_instrument_type,
@@ -26,6 +33,27 @@ _MACRO_NEWS_TOTAL_BUDGET_SECONDS = 15
 _MACRO_NEWS_SOURCE_TIMEOUT_SECONDS = 12
 _MACRO_NEWS_SOURCE_COOLDOWN_SECONDS = 60 * 60
 _macro_news_source_health: dict[str, float] = {}
+_OHLCV_RENAME_MAP = {
+    "日期": "Date",
+    "开盘": "Open",
+    "最高": "High",
+    "最低": "Low",
+    "收盘": "Close",
+    "成交量": "Volume",
+    "成交额": "Amount",
+    "振幅": "Amplitude",
+    "涨跌幅": "Pct Change",
+    "涨跌额": "Change",
+    "换手率": "Turnover",
+    "date": "Date",
+    "open": "Open",
+    "high": "High",
+    "low": "Low",
+    "close": "Close",
+    "volume": "Volume",
+    "amount": "Amount",
+}
+_OHLCV_REQUIRED_COLUMNS = ("Date", "Open", "High", "Low", "Close", "Volume")
 
 
 def _get_cache():
@@ -59,29 +87,92 @@ def get_stock(
 ) -> str:
     """Retrieve A-share equity or listed fund OHLCV data using AkShare."""
     try:
-        data = _load_ohlcv(symbol, start_date, end_date)
-        if data.empty:
-            normalized = normalize_ticker_symbol(symbol)
-            return (
-                f"[Data Availability Notice] No AkShare data found for symbol '{normalized}' between {start_date} and {end_date}. "
-                "This might be because the requested date range consists entirely of non-trading days (weekends or public holidays), "
-                "or the market was closed, or the ticker is temporarily suspended. "
-                "If trading data is missing, check alternative vendors or rely on the latest available history."
-            )
-
-        csv_string = data.to_csv(index=False)
-        normalized = normalize_ticker_symbol(symbol)
-        if detect_market_type(normalized) == MarketType.CN_FUND:
-            header = f"# Tiantian Fund NAV data for {normalized} from {start_date} to {end_date}\n"
-        else:
-            header = f"# AkShare data for {normalized} from {start_date} to {end_date}\n"
-        header += f"# Total records: {len(data)}\n"
-        header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        return header + csv_string
+        return _render_stock_result(_get_stock_result(symbol, start_date, end_date))
     except AkShareDataError:
         raise
     except Exception as e:
         raise AkShareDataError(f"Error retrieving AkShare data for {symbol}: {str(e)}") from e
+
+
+def get_stock_result(symbol: str, start_date: str, end_date: str) -> DataResult:
+    """Return structured China price/NAV data without changing tool string output."""
+    return _get_stock_result(symbol, start_date, end_date)
+
+
+def _get_stock_result(symbol: str, start_date: str, end_date: str) -> DataResult:
+    normalized = normalize_ticker_symbol(symbol)
+    semantic = "nav" if detect_market_type(normalized) == MarketType.CN_FUND else "ohlcv"
+    result = _load_ohlcv_result(symbol, start_date, end_date)
+    data = result.payload if isinstance(result.payload, pd.DataFrame) else pd.DataFrame()
+    if data.empty:
+        notice = data_notice(
+            "no_rows",
+            (
+                f"No {semantic.upper()} rows found for '{normalized}' between "
+                f"{start_date} and {end_date}."
+            ),
+            source=result.meta.source,
+            detail=(
+                "The requested range may contain only non-trading days, holidays, "
+                "a suspension, or unavailable vendor coverage."
+            ),
+        )
+        return DataResult(
+            meta=result.meta,
+            payload=data,
+            notices=result.notices + (notice,),
+            ok=False,
+            missing_reason="no_rows",
+            error_type=result.error_type,
+            metadata={**result.metadata, "start_date": start_date, "end_date": end_date},
+        )
+
+    as_of = _frame_as_of(data)
+    meta = SourceMeta(
+        vendor=result.meta.vendor,
+        source=result.meta.source,
+        symbol=normalized,
+        semantic=semantic,
+        as_of=as_of,
+        retrieved_at=_now_timestamp(),
+    )
+    return DataResult(
+        meta=meta,
+        payload=data,
+        notices=result.notices,
+        ok=True,
+        error_type=result.error_type,
+        metadata={**result.metadata, "start_date": start_date, "end_date": end_date},
+    )
+
+
+def _render_stock_result(result: DataResult) -> str:
+    normalized = result.meta.symbol
+    start_date = result.metadata.get("start_date", "")
+    end_date = result.metadata.get("end_date", "")
+    if not result.ok or not isinstance(result.payload, pd.DataFrame) or result.payload.empty:
+        notice_text = (
+            f"[Data Availability Notice] No {result.meta.source} data found for symbol "
+            f"'{normalized}' between {start_date} and {end_date}. "
+            "This might be because the requested date range consists entirely of non-trading days "
+            "(weekends or public holidays), or the market was closed, or the ticker is temporarily "
+            "suspended. If trading data is missing, check alternative vendors or rely on the latest "
+            "available history."
+        )
+        return notice_text + render_notices(result.notices)
+
+    csv_string = result.payload.to_csv(index=False)
+    if result.meta.semantic == "nav":
+        header = f"# Tiantian Fund NAV data for {normalized} from {start_date} to {end_date}\n"
+    else:
+        header = f"# AkShare data for {normalized} from {start_date} to {end_date}\n"
+    header += f"# Source: {result.meta.source}\n"
+    header += f"# Semantic: {result.meta.semantic}\n"
+    if result.meta.as_of:
+        header += f"# As of: {result.meta.as_of}\n"
+    header += f"# Total records: {len(result.payload)}\n"
+    header += f"# Data retrieved on: {result.meta.retrieved_at or _now_timestamp()}\n\n"
+    return header + csv_string + render_notices(result.notices)
 
 
 @akshare_disk_cache(expire=14400)
@@ -144,10 +235,19 @@ def get_indicator(
 
 @akshare_disk_cache(expire=14400)
 def get_fundamentals(ticker: str, curr_date: Optional[str] = None) -> str:
+    return _get_fundamentals_result(ticker, curr_date).text or ""
+
+
+def get_fundamentals_result(ticker: str, curr_date: Optional[str] = None) -> DataResult:
+    """Return structured China fundamentals/profile data."""
+    return _get_fundamentals_result(ticker, curr_date)
+
+
+def _get_fundamentals_result(ticker: str, curr_date: Optional[str] = None) -> DataResult:
     normalized = normalize_ticker_symbol(ticker)
     if detect_instrument_type(normalized) == InstrumentType.FUND:
-        return _get_fund_profile(normalized, curr_date)
-    return _get_equity_profile(normalized, curr_date)
+        return _get_fund_profile_result(normalized, curr_date)
+    return _get_equity_profile_result(normalized, curr_date)
 
 
 @akshare_disk_cache(expire=14400)
@@ -173,9 +273,20 @@ def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: Option
 
 @akshare_disk_cache(expire=14400)
 def get_news(ticker: str, start_date: str, end_date: str) -> str:
+    return _get_news_result(ticker, start_date, end_date).text or ""
+
+
+def get_news_result(ticker: str, start_date: str, end_date: str) -> DataResult:
+    """Return structured China news/announcement data."""
+    return _get_news_result(ticker, start_date, end_date)
+
+
+def _get_news_result(ticker: str, start_date: str, end_date: str) -> DataResult:
     ak = _ak()
     normalized = normalize_ticker_symbol(ticker)
     symbol = to_akshare_symbol(ticker)
+    retrieved_at = _now_timestamp()
+    notices: list[DataNotice] = []
     try:
         if detect_instrument_type(normalized) == InstrumentType.FUND:
             fund_label = _fund_label(normalized)
@@ -191,31 +302,167 @@ def get_news(ticker: str, start_date: str, end_date: str) -> str:
                 ignore_index=True,
             )
             if data.empty:
-                return (
+                text = (
                     f"No AkShare {fund_label} announcements found for {normalized} between "
                     f"{start_date} and {end_date}. Use {_fund_context_hint(normalized)} instead."
                 )
+                notices.append(
+                    data_notice(
+                        "no_news",
+                        f"No AkShare {fund_label} announcements were available in the requested window.",
+                        source="akshare_fund_announcements",
+                    )
+                )
+                return DataResult(
+                    meta=SourceMeta(
+                        vendor="akshare",
+                        source="akshare_fund_announcements",
+                        symbol=normalized,
+                        semantic="news",
+                        retrieved_at=retrieved_at,
+                    ),
+                    payload=data,
+                    notices=tuple(notices),
+                    ok=False,
+                    missing_reason="no_news",
+                    text=text + render_notices(tuple(notices)),
+                    metadata={"start_date": start_date, "end_date": end_date},
+                )
             data, used_fallback = _filter_fund_announcements(data, start_date, end_date)
             if data.empty:
-                return f"No AkShare {fund_label} announcements found for {normalized} on or before {end_date}"
+                text = f"No AkShare {fund_label} announcements found for {normalized} on or before {end_date}"
+                notices.append(
+                    data_notice(
+                        "no_news",
+                        f"No AkShare {fund_label} announcements were available on or before {end_date}.",
+                        source="akshare_fund_announcements",
+                    )
+                )
+                return DataResult(
+                    meta=SourceMeta(
+                        vendor="akshare",
+                        source="akshare_fund_announcements",
+                        symbol=normalized,
+                        semantic="news",
+                        retrieved_at=retrieved_at,
+                    ),
+                    payload=data,
+                    notices=tuple(notices),
+                    ok=False,
+                    missing_reason="no_news",
+                    text=text + render_notices(tuple(notices)),
+                    metadata={"start_date": start_date, "end_date": end_date},
+                )
             rows = _render_news_rows(data)
             if used_fallback:
                 heading = (
                     f"## {normalized} Recent {fund_label.title()} Announcements before {end_date} "
                     f"(none found from {start_date} to {end_date}):\n\n"
                 )
+                notices.append(
+                    data_notice(
+                        "window_fallback",
+                        (
+                            "No fund announcements were found inside the requested window; "
+                            "using recent announcements before the end date."
+                        ),
+                        source="akshare_fund_announcements",
+                        severity="info",
+                    )
+                )
             else:
                 heading = f"## {normalized} {fund_label.title()} Announcements, from {start_date} to {end_date}:\n\n"
-            return heading + "\n".join(rows)
+            text = heading + "\n".join(rows) + render_notices(tuple(notices))
+            return DataResult(
+                meta=SourceMeta(
+                    vendor="akshare",
+                    source="akshare_fund_announcements",
+                    symbol=normalized,
+                    semantic="news",
+                    as_of=_news_as_of(data),
+                    retrieved_at=retrieved_at,
+                ),
+                payload=data,
+                notices=tuple(notices),
+                ok=True,
+                text=text,
+                metadata={
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "used_fallback": used_fallback,
+                },
+            )
 
         data = ak.stock_news_em(symbol=symbol)
         if data is None or data.empty:
-            return f"No AkShare news found for {ticker}"
+            text = f"No AkShare news found for {ticker}"
+            notices.append(
+                data_notice(
+                    "no_news",
+                    f"No AkShare stock news rows were available for {normalized}.",
+                    source="akshare_stock_news",
+                )
+            )
+            return DataResult(
+                meta=SourceMeta(
+                    vendor="akshare",
+                    source="akshare_stock_news",
+                    symbol=normalized,
+                    semantic="news",
+                    retrieved_at=retrieved_at,
+                ),
+                payload=pd.DataFrame() if data is None else data,
+                notices=tuple(notices),
+                ok=False,
+                missing_reason="no_news",
+                text=text + render_notices(tuple(notices)),
+                metadata={"start_date": start_date, "end_date": end_date},
+            )
         data = _filter_date_rows(data, start_date, end_date)
         if data.empty:
-            return f"No AkShare news found for {ticker} between {start_date} and {end_date}"
+            text = f"No AkShare news found for {ticker} between {start_date} and {end_date}"
+            notices.append(
+                data_notice(
+                    "no_news",
+                    f"No AkShare stock news rows survived date filtering for {normalized}.",
+                    source="akshare_stock_news",
+                )
+            )
+            return DataResult(
+                meta=SourceMeta(
+                    vendor="akshare",
+                    source="akshare_stock_news",
+                    symbol=normalized,
+                    semantic="news",
+                    retrieved_at=retrieved_at,
+                ),
+                payload=data,
+                notices=tuple(notices),
+                ok=False,
+                missing_reason="no_news",
+                text=text + render_notices(tuple(notices)),
+                metadata={"start_date": start_date, "end_date": end_date},
+            )
         rows = _render_news_rows(data)
-        return f"## {normalize_ticker_symbol(ticker)} News, from {start_date} to {end_date}:\n\n" + "\n".join(rows)
+        text = (
+            f"## {normalize_ticker_symbol(ticker)} News, from {start_date} to {end_date}:\n\n"
+            + "\n".join(rows)
+        )
+        return DataResult(
+            meta=SourceMeta(
+                vendor="akshare",
+                source="akshare_stock_news",
+                symbol=normalized,
+                semantic="news",
+                as_of=_news_as_of(data),
+                retrieved_at=retrieved_at,
+            ),
+            payload=data,
+            notices=tuple(notices),
+            ok=True,
+            text=text,
+            metadata={"start_date": start_date, "end_date": end_date},
+        )
     except AkShareDataError:
         raise
     except Exception as e:
@@ -257,9 +504,32 @@ def get_insider_transactions(ticker: str) -> str:
 
 
 def _load_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+    result = _load_ohlcv_result(symbol, start_date, end_date)
+    return result.payload if isinstance(result.payload, pd.DataFrame) else pd.DataFrame()
+
+
+def _load_ohlcv_result(symbol: str, start_date: str, end_date: str) -> DataResult:
     normalized = normalize_ticker_symbol(symbol)
     if detect_market_type(normalized) == MarketType.CN_FUND:
-        return _normalize_ohlcv(get_fund_nav_history(normalized, start_date, end_date), start_date, end_date)
+        data = _normalize_ohlcv(
+            get_fund_nav_history(normalized, start_date, end_date),
+            start_date,
+            end_date,
+        )
+        return DataResult(
+            meta=SourceMeta(
+                vendor="akshare",
+                source="tiantian_fund_nav",
+                symbol=normalized,
+                semantic="nav",
+                as_of=_frame_as_of(data),
+                retrieved_at=_now_timestamp(),
+            ),
+            payload=data,
+            ok=not data.empty,
+            missing_reason=None if not data.empty else "no_rows",
+            metadata={"start_date": start_date, "end_date": end_date},
+        )
 
     ak = _ak()
     pure_symbol = to_akshare_symbol(normalized)
@@ -268,16 +538,44 @@ def _load_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
 
     errors = []
     empty_sources = []
+    notices: list[DataNotice] = []
     for source_name, loader in _ohlcv_source_loaders(ak, normalized, pure_symbol, start, end):
         try:
-            data = _normalize_ohlcv(loader(), start_date, end_date)
+            raw = loader()
+            data = _normalize_ohlcv(raw, start_date, end_date)
         except Exception as exc:
             errors.append(f"{source_name}: {exc}")
+            notices.append(
+                data_notice(
+                    "source_error",
+                    f"{source_name} failed while loading OHLCV data.",
+                    source=source_name,
+                    detail=str(exc),
+                    severity="warning",
+                )
+            )
             continue
         if data.empty:
             empty_sources.append(source_name)
+            drift_notice = _ohlcv_empty_notice(source_name, raw, start_date, end_date)
+            if drift_notice is not None:
+                notices.append(drift_notice)
             continue
-        return data
+        return DataResult(
+            meta=SourceMeta(
+                vendor="akshare",
+                source=source_name,
+                symbol=normalized,
+                semantic="ohlcv",
+                as_of=_frame_as_of(data),
+                retrieved_at=_now_timestamp(),
+            ),
+            payload=data,
+            notices=tuple(notices),
+            ok=True,
+            error_type="schema_drift" if any(n.code == "schema_drift" for n in notices) else None,
+            metadata={"start_date": start_date, "end_date": end_date},
+        )
 
     columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
     if errors:
@@ -285,7 +583,21 @@ def _load_ohlcv(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         if empty_sources:
             details += " | empty sources: " + ", ".join(empty_sources)
         raise AkShareDataError(f"AkShare OHLCV sources failed for {normalized}: {details}")
-    return pd.DataFrame(columns=columns)
+    return DataResult(
+        meta=SourceMeta(
+            vendor="akshare",
+            source=",".join(empty_sources) if empty_sources else "akshare_ohlcv",
+            symbol=normalized,
+            semantic="ohlcv",
+            retrieved_at=_now_timestamp(),
+        ),
+        payload=pd.DataFrame(columns=columns),
+        notices=tuple(notices),
+        ok=False,
+        missing_reason="no_rows",
+        error_type="schema_drift" if any(n.code == "schema_drift" for n in notices) else None,
+        metadata={"start_date": start_date, "end_date": end_date},
+    )
 
 
 @akshare_disk_cache(expire=14400)
@@ -406,29 +718,8 @@ def _normalize_ohlcv(data: pd.DataFrame, start_date: str, end_date: str) -> pd.D
     if data is None or data.empty:
         return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
 
-    rename_map = {
-        "日期": "Date",
-        "开盘": "Open",
-        "最高": "High",
-        "最低": "Low",
-        "收盘": "Close",
-        "成交量": "Volume",
-        "成交额": "Amount",
-        "振幅": "Amplitude",
-        "涨跌幅": "Pct Change",
-        "涨跌额": "Change",
-        "换手率": "Turnover",
-        "date": "Date",
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume",
-        "amount": "Amount",
-    }
-    normalized = data.rename(columns={k: v for k, v in rename_map.items() if k in data.columns}).copy()
-    required = ["Date", "Open", "High", "Low", "Close", "Volume"]
-    for column in required:
+    normalized = data.rename(columns={k: v for k, v in _OHLCV_RENAME_MAP.items() if k in data.columns}).copy()
+    for column in _OHLCV_REQUIRED_COLUMNS:
         if column not in normalized.columns:
             normalized[column] = pd.NA
     normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce")
@@ -444,11 +735,93 @@ def _normalize_ohlcv(data: pd.DataFrame, start_date: str, end_date: str) -> pd.D
     return normalized[columns]
 
 
+def _ohlcv_empty_notice(
+    source_name: str,
+    raw: Optional[pd.DataFrame],
+    start_date: str,
+    end_date: str,
+) -> DataNotice | None:
+    if raw is None or raw.empty:
+        return data_notice(
+            "no_rows",
+            f"{source_name} returned no raw rows.",
+            source=source_name,
+            detail=f"requested={start_date}..{end_date}",
+            severity="info",
+        )
+
+    renamed = raw.rename(columns={k: v for k, v in _OHLCV_RENAME_MAP.items() if k in raw.columns})
+    missing_required = [column for column in ("Date", "Close") if column not in renamed.columns]
+    if missing_required:
+        return data_notice(
+            "schema_drift",
+            f"{source_name} returned rows but missed required column(s): {', '.join(missing_required)}.",
+            source=source_name,
+            detail=f"columns={list(raw.columns)}",
+            severity="warning",
+        )
+
+    return data_notice(
+        "filtered_empty",
+        f"{source_name} returned rows but none survived date/price validation.",
+        source=source_name,
+        detail=f"requested={start_date}..{end_date}",
+        severity="info",
+    )
+
+
+def _frame_as_of(data: pd.DataFrame, date_column: str = "Date") -> str | None:
+    if data is None or data.empty or date_column not in data.columns:
+        return None
+    parsed = pd.to_datetime(data[date_column], errors="coerce").dropna()
+    if parsed.empty:
+        return None
+    return parsed.max().strftime("%Y-%m-%d")
+
+
+def _tables_as_of(tables) -> str | None:
+    dates = []
+    for table in tables or []:
+        data = getattr(table, "data", None)
+        if data is None or data.empty:
+            continue
+        for column in data.columns:
+            if "日期" not in str(column) and "date" not in str(column).lower():
+                continue
+            parsed = pd.to_datetime(data[column], errors="coerce").dropna()
+            if not parsed.empty:
+                dates.append(parsed.max())
+    if not dates:
+        return None
+    return max(dates).strftime("%Y-%m-%d")
+
+
+def _news_as_of(data: pd.DataFrame) -> str | None:
+    if data is None or data.empty:
+        return None
+    for column in data.columns:
+        if "时间" in str(column) or "日期" in str(column) or "date" in str(column).lower():
+            parsed = _parse_datetime_series(data[column]).dropna()
+            if not parsed.empty:
+                return parsed.max().strftime("%Y-%m-%d")
+    return None
+
+
+def _now_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _get_fund_profile(ticker: str, curr_date: Optional[str]) -> str:
+    return _get_fund_profile_result(ticker, curr_date).text or ""
+
+
+def _get_fund_profile_result(ticker: str, curr_date: Optional[str]) -> DataResult:
     pure_symbol = to_akshare_symbol(ticker)
     is_otc_fund = detect_market_type(ticker) == MarketType.CN_FUND
     title = "China OTC Fund Profile" if is_otc_fund else "Listed Fund Profile"
-    lines = [f"# {title} for {ticker}", f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
+    retrieved_at = _now_timestamp()
+    lines = [f"# {title} for {ticker}", f"# Data retrieved on: {retrieved_at}", ""]
+    notices: list[DataNotice] = []
 
     tiantian_tables = _safe_tiantian_fund_tables(pure_symbol, curr_date)
     for table in tiantian_tables:
@@ -457,10 +830,32 @@ def _get_fund_profile(ticker: str, curr_date: Optional[str]) -> str:
     if is_otc_fund:
         if not tiantian_tables:
             lines.append(f"No Tiantian Fund profile data found for {pure_symbol}.")
+            notices.append(
+                data_notice(
+                    "no_profile_data",
+                    f"No Tiantian Fund profile tables were available for {pure_symbol}.",
+                    source="tiantian_fund_profile",
+                )
+            )
         lines.append(
             "Fund analysis focus: NAV trend, fund category/share class, fund manager, assets under management, fees, asset allocation, holdings concentration, QDII/FX risk where applicable, and redemption/subscription constraints. Do not use listed-company financial statement semantics."
         )
-        return "\n".join(lines)
+        text = "\n".join(lines) + render_notices(tuple(notices))
+        return DataResult(
+            meta=SourceMeta(
+                vendor="akshare",
+                source="tiantian_fund_profile",
+                symbol=ticker,
+                semantic="fund_profile",
+                as_of=_tables_as_of(tiantian_tables),
+                retrieved_at=retrieved_at,
+            ),
+            payload=tiantian_tables,
+            notices=tuple(notices),
+            ok=bool(tiantian_tables),
+            missing_reason=None if tiantian_tables else "no_profile_data",
+            text=text,
+        )
 
     ak = _ak()
     overview = _safe_call(lambda: ak.fund_overview_em(symbol=pure_symbol))
@@ -475,18 +870,78 @@ def _get_fund_profile(ticker: str, curr_date: Optional[str]) -> str:
     lines.append(
         "Fund analysis focus: benchmark/theme exposure, premium or discount, liquidity, fund size, fees, holdings concentration, and market risk."
     )
-    return "\n".join(lines)
+    payload_tables = [
+        ("Tiantian Fund", table.data) for table in tiantian_tables
+    ] + [
+        ("AkShare Fund Overview", overview),
+        ("AkShare Fund Fees", fee),
+        ("AkShare Fund Top Holdings", holdings),
+    ]
+    has_profile_rows = any(isinstance(data, pd.DataFrame) and not data.empty for _, data in payload_tables)
+    if not has_profile_rows:
+        notices.append(
+            data_notice(
+                "no_profile_data",
+                f"No listed fund profile tables were available for {pure_symbol}.",
+                source="akshare_fund_profile",
+            )
+        )
+    text = "\n".join(lines) + render_notices(tuple(notices))
+    return DataResult(
+        meta=SourceMeta(
+            vendor="akshare",
+            source="akshare_fund_profile",
+            symbol=ticker,
+            semantic="fund_profile",
+            as_of=_tables_as_of(tiantian_tables),
+            retrieved_at=retrieved_at,
+        ),
+        payload=payload_tables,
+        notices=tuple(notices),
+        ok=has_profile_rows,
+        missing_reason=None if has_profile_rows else "no_profile_data",
+        text=text,
+    )
 
 
 def _get_equity_profile(ticker: str, curr_date: Optional[str]) -> str:
+    return _get_equity_profile_result(ticker, curr_date).text or ""
+
+
+def _get_equity_profile_result(ticker: str, curr_date: Optional[str]) -> DataResult:
     ak = _ak()
     symbol = to_akshare_symbol(ticker)
-    lines = [f"# A-share Company Fundamentals for {ticker}", f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
+    retrieved_at = _now_timestamp()
+    lines = [f"# A-share Company Fundamentals for {ticker}", f"# Data retrieved on: {retrieved_at}", ""]
     spot = _safe_call(lambda: ak.stock_individual_info_em(symbol=symbol))
     financial = _safe_call(lambda: ak.stock_financial_abstract(symbol=symbol))
     lines.extend(_render_table_like("Company Profile", spot))
     lines.extend(_render_table_like("Financial Abstract", _filter_statement_by_date(financial, curr_date), max_rows=20))
-    return "\n".join(lines)
+    has_profile_rows = (spot is not None and not spot.empty) or (financial is not None and not financial.empty)
+    notices: tuple[DataNotice, ...] = ()
+    if not has_profile_rows:
+        notices = (
+            data_notice(
+                "no_profile_data",
+                f"No AkShare company profile or financial abstract rows were available for {ticker}.",
+                source="akshare_equity_profile",
+            ),
+        )
+    text = "\n".join(lines) + render_notices(notices)
+    return DataResult(
+        meta=SourceMeta(
+            vendor="akshare",
+            source="akshare_equity_profile",
+            symbol=ticker,
+            semantic="company_profile",
+            retrieved_at=retrieved_at,
+        ),
+        payload=[("Company Profile", spot), ("Financial Abstract", financial)],
+        notices=notices,
+        ok=has_profile_rows,
+        missing_reason=None if has_profile_rows else "no_profile_data",
+        text=text,
+    )
 
 
 def _financial_statement(ticker: str, statement: str, freq: str, curr_date: Optional[str]) -> str:

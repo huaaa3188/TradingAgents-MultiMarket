@@ -11,6 +11,7 @@ import requests
 from parsel import Selector
 
 from .cache import disk_cache
+from .contracts import DataResult, SourceMeta, data_notice
 
 
 DETAIL_URL = "https://fund.eastmoney.com/pingzhongdata/{symbol}.js"
@@ -27,6 +28,53 @@ class TiantianTable:
     title: str
     data: pd.DataFrame
     max_rows: int = 12
+
+
+def get_fund_profile_tables_result(
+    symbol: str,
+    curr_date: Optional[str] = None,
+    holdings_limit: int = 10,
+) -> DataResult:
+    code = _pure_fund_code(symbol)
+    try:
+        tables = get_fund_profile_tables(code, curr_date, holdings_limit)
+    except TiantianFundDataError as exc:
+        return DataResult(
+            meta=SourceMeta(
+                vendor="tiantian_fund",
+                source="eastmoney_pingzhongdata",
+                symbol=code,
+                semantic="fund_profile",
+                retrieved_at=_now_timestamp(),
+            ),
+            payload=[],
+            notices=(
+                data_notice(
+                    "source_error",
+                    "Tiantian Fund profile data could not be loaded.",
+                    source="eastmoney_pingzhongdata",
+                    detail=str(exc),
+                    severity="error",
+                ),
+            ),
+            ok=False,
+            missing_reason="no_profile_data",
+            error_type="source_error",
+        )
+
+    return DataResult(
+        meta=SourceMeta(
+            vendor="tiantian_fund",
+            source="eastmoney_pingzhongdata",
+            symbol=code,
+            semantic="fund_profile",
+            as_of=_tables_as_of(tables),
+            retrieved_at=_now_timestamp(),
+        ),
+        payload=tables,
+        ok=bool(tables),
+        missing_reason=None if tables else "no_profile_data",
+    )
 
 
 @disk_cache("tiantian_fund", expire=86400)
@@ -47,6 +95,53 @@ def get_fund_profile_tables(
     if not non_empty_tables:
         raise TiantianFundDataError(f"No Tiantian Fund profile data returned for {code}")
     return non_empty_tables
+
+
+def get_fund_nav_history_result(
+    symbol: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> DataResult:
+    code = _pure_fund_code(symbol)
+    try:
+        data = get_fund_nav_history(code, start_date, end_date)
+    except TiantianFundDataError as exc:
+        return DataResult(
+            meta=SourceMeta(
+                vendor="tiantian_fund",
+                source="eastmoney_nav_trend",
+                symbol=code,
+                semantic="nav",
+                retrieved_at=_now_timestamp(),
+            ),
+            payload=pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"]),
+            notices=(
+                data_notice(
+                    "source_error",
+                    "Tiantian Fund NAV history could not be loaded.",
+                    source="eastmoney_nav_trend",
+                    detail=str(exc),
+                    severity="error",
+                ),
+            ),
+            ok=False,
+            missing_reason="no_nav_data",
+            error_type="source_error",
+        )
+
+    return DataResult(
+        meta=SourceMeta(
+            vendor="tiantian_fund",
+            source="eastmoney_nav_trend",
+            symbol=code,
+            semantic="nav",
+            as_of=_frame_as_of(data),
+            retrieved_at=_now_timestamp(),
+        ),
+        payload=data,
+        ok=not data.empty,
+        missing_reason=None if not data.empty else "no_nav_data",
+    )
 
 
 @disk_cache("tiantian_fund", expire=14400)
@@ -458,6 +553,35 @@ def _series_value(values: Any, idx: int) -> Any:
     if isinstance(values, list) and idx < len(values):
         return values[idx]
     return ""
+
+
+def _tables_as_of(tables: list[TiantianTable]) -> str | None:
+    dates = []
+    for table in tables:
+        if table.data is None or table.data.empty:
+            continue
+        for column in table.data.columns:
+            if "日期" not in str(column) and "date" not in str(column).lower():
+                continue
+            parsed = pd.to_datetime(table.data[column], errors="coerce").dropna()
+            if not parsed.empty:
+                dates.append(parsed.max())
+    if not dates:
+        return None
+    return max(dates).strftime("%Y-%m-%d")
+
+
+def _frame_as_of(data: pd.DataFrame) -> str | None:
+    if data is None or data.empty or "Date" not in data.columns:
+        return None
+    parsed = pd.to_datetime(data["Date"], errors="coerce").dropna()
+    if parsed.empty:
+        return None
+    return parsed.max().strftime("%Y-%m-%d")
+
+
+def _now_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _pure_fund_code(symbol: str) -> str:

@@ -235,6 +235,64 @@ def test_get_stock_routes_cn_otc_fund_nav(monkeypatch):
     assert "2026-01-03" in result
 
 
+def test_get_stock_contract_marks_cn_otc_fund_as_nav(monkeypatch):
+    monkeypatch.setattr(akshare, "_ak", lambda: (_ for _ in ()).throw(AssertionError("_ak should not be called")))
+    monkeypatch.setattr(akshare, "get_fund_nav_history", lambda symbol, start, end: _nav_frame())
+
+    result = akshare.get_stock_result("012920", "2026-01-01", "2026-01-03")
+
+    assert result.ok is True
+    assert result.meta.semantic == "nav"
+    assert result.meta.source == "tiantian_fund_nav"
+    assert result.meta.as_of == "2026-01-03"
+    assert result.rows == 3
+
+
+def test_get_stock_contract_records_schema_drift_before_fallback(monkeypatch):
+    class FakeAkShareWithDriftedEastmoney(FakeAkShare):
+        def stock_zh_a_hist(self, **kwargs):
+            self.calls.append(("stock_zh_a_hist", kwargs))
+            return pd.DataFrame(
+                [
+                    {"日期": "2026-01-01", "开盘": 10, "最高": 11, "最低": 9, "成交量": 1000},
+                ]
+            )
+
+    fake = FakeAkShareWithDriftedEastmoney()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_stock_result("600519", "2026-01-01", "2026-01-03")
+
+    assert result.ok is True
+    assert result.error_type == "schema_drift"
+    assert any(notice.code == "schema_drift" for notice in result.notices)
+    assert result.meta.source == "sina_stock_zh_a_daily"
+
+
+def test_get_stock_contract_marks_empty_data_with_missing_reason(monkeypatch):
+    monkeypatch.setattr(
+        akshare,
+        "_load_ohlcv_result",
+        lambda symbol, start, end: akshare.DataResult(
+            meta=akshare.SourceMeta(
+                vendor="akshare",
+                source="akshare_ohlcv",
+                symbol=akshare.normalize_ticker_symbol(symbol),
+                semantic="ohlcv",
+            ),
+            payload=pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"]),
+            ok=False,
+            missing_reason="no_rows",
+        ),
+    )
+
+    result = akshare.get_stock_result("600519", "2026-01-01", "2026-01-03")
+
+    assert result.ok is False
+    assert result.missing_reason == "no_rows"
+    assert any(notice.code == "no_rows" for notice in result.notices)
+
+
 def test_get_indicator_uses_cn_otc_fund_nav(monkeypatch):
     monkeypatch.setattr(akshare, "get_fund_nav_history", lambda symbol, start, end: _nav_frame())
 
@@ -281,6 +339,15 @@ def test_get_fundamentals_returns_cn_otc_fund_profile(monkeypatch):
     assert "AkShare Fund Overview" not in result
 
 
+def test_get_fundamentals_contract_reports_missing_otc_profile():
+    result = akshare.get_fundamentals_result("012920", "2026-06-04")
+
+    assert result.ok is False
+    assert result.meta.semantic == "fund_profile"
+    assert result.missing_reason == "no_profile_data"
+    assert any(notice.code == "no_profile_data" for notice in result.notices)
+
+
 def test_fund_financial_statements_are_not_applicable():
     assert "not applicable to listed fund 510300.SH" in akshare.get_balance_sheet("510300")
     assert "not applicable to listed fund 510300.SH" in akshare.get_cashflow("510300")
@@ -318,6 +385,19 @@ def test_fund_news_uses_fund_announcements_not_stock_news(monkeypatch):
     assert "基金定期报告" in result
     assert "fund_announcement_report_em" in call_names
     assert "stock_news_em" not in call_names
+
+
+def test_news_contract_carries_fund_announcement_metadata(monkeypatch):
+    fake = FakeAkShare()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_news_result("510300", "2026-01-01", "2026-01-03")
+
+    assert result.ok is True
+    assert result.meta.semantic == "news"
+    assert result.meta.source == "akshare_fund_announcements"
+    assert result.meta.as_of == "2026-01-02"
+    assert result.rows == 1
 
 
 def test_fund_news_falls_back_to_recent_announcements_before_end_date(monkeypatch):
@@ -801,6 +881,32 @@ def _nav_frame():
     )
 
 
+def _ohlcv_result(symbol="600519", source="test_loader"):
+    normalized = akshare.normalize_ticker_symbol(symbol)
+    return akshare.DataResult(
+        meta=akshare.SourceMeta(
+            vendor="akshare",
+            source=source,
+            symbol=normalized,
+            semantic="ohlcv",
+            as_of="2026-01-03",
+            retrieved_at="2026-01-03 12:00:00",
+        ),
+        payload=_ohlcv_frame().rename(
+            columns={
+                "日期": "Date",
+                "开盘": "Open",
+                "最高": "High",
+                "最低": "Low",
+                "收盘": "Close",
+                "成交量": "Volume",
+            }
+        ),
+        ok=True,
+        metadata={"start_date": "2026-01-01", "end_date": "2026-01-03"},
+    )
+
+
 def _lowercase_ohlcv_frame():
     return pd.DataFrame(
         [
@@ -829,20 +935,20 @@ def test_akshare_disk_cache_behavior(tmp_path, monkeypatch):
 
     # 2. Mock 真正的底层 _load_ohlcv 数据源
     load_count = 0
-    def mock_load_ohlcv(symbol, start, end):
+    def mock_load_ohlcv_result(symbol, start, end):
         nonlocal load_count
         load_count += 1
-        return _ohlcv_frame()
-    monkeypatch.setattr(akshare, "_load_ohlcv", mock_load_ohlcv)
+        return _ohlcv_result(symbol)
+    monkeypatch.setattr(akshare, "_load_ohlcv_result", mock_load_ohlcv_result)
 
     # 3. 第一次调用：应该调用底层加载方法，并且回写磁盘
     res1 = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
     assert load_count == 1
 
     # 4. 第二次调用：直接从缓存中获取，即使 _load_ohlcv 抛出异常也应该成功返回结果
-    def fail_load_ohlcv(symbol, start, end):
+    def fail_load_ohlcv_result(symbol, start, end):
         raise RuntimeError("Network API should not be called!")
-    monkeypatch.setattr(akshare, "_load_ohlcv", fail_load_ohlcv)
+    monkeypatch.setattr(akshare, "_load_ohlcv_result", fail_load_ohlcv_result)
 
     res2 = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
 
@@ -856,7 +962,7 @@ def test_akshare_disk_cache_records_hit_miss_stats(tmp_path, monkeypatch):
 
     dataflow_cache.reset_cache_stats("akshare")
     dataflow_cache.set_disk_cache("akshare", Cache(str(tmp_path / "stats_cache")))
-    monkeypatch.setattr(akshare, "_load_ohlcv", lambda symbol, start, end: _ohlcv_frame())
+    monkeypatch.setattr(akshare, "_load_ohlcv_result", lambda symbol, start, end: _ohlcv_result(symbol))
 
     akshare.get_stock("600519", "2026-01-01", "2026-01-03")
     akshare.get_stock("600519", "2026-01-01", "2026-01-03")
@@ -875,11 +981,11 @@ def test_akshare_disk_cache_graceful_fallback(monkeypatch):
 
     # 2. Mock 正常的数据底层加载
     load_count = 0
-    def mock_load_ohlcv(symbol, start, end):
+    def mock_load_ohlcv_result(symbol, start, end):
         nonlocal load_count
         load_count += 1
-        return _ohlcv_frame()
-    monkeypatch.setattr(akshare, "_load_ohlcv", mock_load_ohlcv)
+        return _ohlcv_result(symbol)
+    monkeypatch.setattr(akshare, "_load_ohlcv_result", mock_load_ohlcv_result)
 
     # 3. 两次调用应该两次都透传到底层（虽然无缓存，但核心业务不被阻断）
     res1 = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
@@ -909,7 +1015,7 @@ def test_akshare_cache_lazy_loads_under_configured_cache_dir(monkeypatch, tmp_pa
     set_config({"data_cache_dir": str(custom_cache_dir)})
     dataflow_cache.clear_disk_cache("akshare")
     monkeypatch.setattr(dataflow_cache, "Cache", FakeCache)
-    monkeypatch.setattr(akshare, "_load_ohlcv", lambda symbol, start, end: _ohlcv_frame())
+    monkeypatch.setattr(akshare, "_load_ohlcv_result", lambda symbol, start, end: _ohlcv_result(symbol))
 
     result = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
 
@@ -1016,11 +1122,11 @@ def test_akshare_disk_cache_disabled_by_config(tmp_path, monkeypatch):
 
     # 2. Mock 底层 _load_ohlcv
     load_count = 0
-    def mock_load_ohlcv(symbol, start, end):
+    def mock_load_ohlcv_result(symbol, start, end):
         nonlocal load_count
         load_count += 1
-        return _ohlcv_frame()
-    monkeypatch.setattr(akshare, "_load_ohlcv", mock_load_ohlcv)
+        return _ohlcv_result(symbol)
+    monkeypatch.setattr(akshare, "_load_ohlcv_result", mock_load_ohlcv_result)
 
     # 3. 开启缓存（默认）：调用一次，填充缓存
     set_config({"enable_data_cache": True})
