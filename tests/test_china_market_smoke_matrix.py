@@ -179,6 +179,31 @@ def test_data_contract_marks_missing_result_failed(monkeypatch):
     assert "no_rows" in result.detail
 
 
+def test_data_contract_marks_optional_news_unavailable_warning(monkeypatch):
+    monkeypatch.setattr(smoke, "get_stock_result", lambda symbol, start, end: _fake_contract_result(symbol, "ohlcv"))
+    monkeypatch.setattr(
+        smoke,
+        "get_fundamentals_result",
+        lambda symbol, end: _fake_contract_result(symbol, "company_profile"),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "get_news_result",
+        lambda symbol, start, end: _fake_contract_result(
+            symbol,
+            "news",
+            ok=False,
+            missing_reason="no_news",
+        ),
+    )
+
+    target = smoke._build_targets(("600519",), ())[0]
+    result = smoke._check_data_contract(target, "600519.SH", "2026-05-12", "2026-05-22")
+
+    assert result.status == smoke.STATUS_WARN
+    assert "news=fail:no_news" in result.detail
+
+
 def test_missing_marker_marks_capability_failed(monkeypatch):
     def route_with_bad_price(method: str, *args):
         if method == "get_stock_data":
@@ -227,6 +252,7 @@ def test_render_markdown_contains_matrix_rows():
 
     assert "# China Market Localization Acceptance Matrix" in markdown
     assert "| 600519 | A-share equity | 600519.SH | cn_a | equity | route_price | OK |" in markdown
+    assert "- WARN: core China price/fundamentals contracts passed" in markdown
 
 
 def test_render_markdown_contains_cache_stats():

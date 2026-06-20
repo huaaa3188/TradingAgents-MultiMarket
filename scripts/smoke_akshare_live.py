@@ -42,8 +42,10 @@ from tradingagents.graph.propagation import Propagator
 
 
 STATUS_OK = "OK"
+STATUS_WARN = "WARN"
 STATUS_FAIL = "FAIL"
 CHINA_CACHE_NAMESPACES = ("akshare", "tiantian_fund")
+OPTIONAL_NEWS_FAILURES = {"no_news", "stale_data"}
 
 DEFAULT_TARGETS = ("600519", "000001", "510300", "159915", "012920")
 DEFAULT_QDII_CANDIDATES = ("012920",)
@@ -262,19 +264,20 @@ def _contract_part(
     analysis_date: str,
     expected_semantic: str,
     max_staleness_days: int | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, tuple[str, ...]]:
     gate = validate_data_result(
         result,
         analysis_date=analysis_date,
         expected_semantic=expected_semantic,
         max_staleness_days=max_staleness_days,
     )
-    status = "pass" if gate.ok else "fail:" + ",".join(notice.code for notice in gate.failures)
+    failure_codes = tuple(notice.code for notice in gate.failures)
+    status = "pass" if gate.ok else "fail:" + ",".join(failure_codes)
     return gate.ok, (
         f"{name}={status}; semantic={result.meta.semantic}; source={result.meta.source}; "
         f"as_of={result.meta.as_of or 'n/a'}; rows={result.rows}; "
         f"warnings={len(gate.warnings)}; failures={len(gate.failures)}"
-    )
+    ), failure_codes
 
 
 def _check_data_contract(
@@ -290,35 +293,42 @@ def _check_data_contract(
         if target.expected_instrument == InstrumentType.FUND
         else "company_profile"
     )
-    parts = [
-        _contract_part(
-            "price",
-            get_stock_result(target.symbol, start_date, end_date),
-            analysis_date=end_date,
-            expected_semantic=price_semantic,
-            max_staleness_days=max_staleness_days,
-        ),
-        _contract_part(
-            "fundamentals",
-            get_fundamentals_result(target.symbol, end_date),
-            analysis_date=end_date,
-            expected_semantic=fundamentals_semantic,
-        ),
-        _contract_part(
-            "news",
-            get_news_result(target.symbol, start_date, end_date),
-            analysis_date=end_date,
-            expected_semantic="news",
-            max_staleness_days=max_staleness_days,
-        ),
-    ]
-    ok = all(part_ok for part_ok, _ in parts)
-    detail = " | ".join(part_detail for _, part_detail in parts)
+    price = _contract_part(
+        "price",
+        get_stock_result(target.symbol, start_date, end_date),
+        analysis_date=end_date,
+        expected_semantic=price_semantic,
+        max_staleness_days=max_staleness_days,
+    )
+    fundamentals = _contract_part(
+        "fundamentals",
+        get_fundamentals_result(target.symbol, end_date),
+        analysis_date=end_date,
+        expected_semantic=fundamentals_semantic,
+    )
+    news = _contract_part(
+        "news",
+        get_news_result(target.symbol, start_date, end_date),
+        analysis_date=end_date,
+        expected_semantic="news",
+        max_staleness_days=max_staleness_days,
+    )
+    parts = [price, fundamentals, news]
+    critical_ok = price[0] and fundamentals[0]
+    news_failure_codes = set(news[2])
+    optional_news_only = (
+        critical_ok
+        and not news[0]
+        and bool(news_failure_codes)
+        and news_failure_codes.issubset(OPTIONAL_NEWS_FAILURES)
+    )
+    ok = critical_ok and news[0]
+    detail = " | ".join(part_detail for _, part_detail, _ in parts)
     return _result(
         target,
         normalized,
         "data_contract",
-        STATUS_OK if ok else STATUS_FAIL,
+        STATUS_OK if ok else (STATUS_WARN if optional_news_only else STATUS_FAIL),
         detail,
     )
 
@@ -552,6 +562,7 @@ def render_markdown(
             "## Legend",
             "",
             "- OK: observed output matched the deterministic marker for that capability.",
+            "- WARN: core China price/fundamentals contracts passed, but optional news was missing or stale.",
             "- FAIL: the vendor, routing layer, snapshot builder, or graph state did not meet the marker.",
         ]
     )
@@ -677,12 +688,16 @@ def main() -> int:
         )
         print(f"\nWrote matrix: {output_path}")
 
+    warnings = [result for result in results if result.status == STATUS_WARN]
     failures = [result for result in results if result.status == STATUS_FAIL]
     print("\n" + "=" * 100)
     if failures:
         print(f"China market localization smoke FAILED with {len(failures)} failure(s).")
         return 1
-    print("China market localization smoke PASSED.")
+    if warnings:
+        print(f"China market localization smoke PASSED with {len(warnings)} warning(s).")
+    else:
+        print("China market localization smoke PASSED.")
     return 0
 
 

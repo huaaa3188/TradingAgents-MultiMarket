@@ -196,6 +196,7 @@ China-market operational notes:
 - China data tools append an `AkShare Data Contract Gate` to tool output. The CLI surfaces the merged result as `Data Reliability` in the live current report, saved `complete_report.md`, and saved `data_reliability.md`.
 - Treat `Data Reliability` as the evidence boundary for China-market facts: `PASS` means the checked contract is usable, `WARN` means usable with explicit limits such as `nav_semantic`, and `FAIL` means the result must not be used as reliable evidence for factual claims.
 - Schema drift fails closed even if a fallback returns rows. Diagnostics such as `schema_drift`, `no_rows`, `stale_data`, `future_data`, or `semantic_mismatch` should be resolved at the data source or routing layer before relying on the report.
+- The live acceptance matrix reports optional China news gaps such as `no_news` or `stale_data` as `WARN` when price and fundamentals contracts pass; core data contract failures remain `FAIL`.
 - Run the live acceptance matrix outside default CI when validating a release candidate:
   ```bash
   TRADINGAGENTS_CACHE_DIR=/private/tmp/tradingagents-china-smoke-cache \
