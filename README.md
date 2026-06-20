@@ -193,6 +193,9 @@ China-market operational notes:
 
 - Direct `tradingagents.dataflows.interface.route_to_vendor(...)` calls still use the configured vendor chain. For standalone dataflow calls, set `data_vendors.*` or `tool_vendors.*` to `akshare` explicitly; the automatic China default is applied by the CLI and `TradingAgentsGraph` run path.
 - China OTC fund price data is daily NAV shaped for tool compatibility. Volume-derived indicators, intraday liquidity, and exchange premium/discount are not valid unless another tool explicitly provides those fields.
+- China data tools append an `AkShare Data Contract Gate` to tool output. The CLI surfaces the merged result as `Data Reliability` in the live current report, saved `complete_report.md`, and saved `data_reliability.md`.
+- Treat `Data Reliability` as the evidence boundary for China-market facts: `PASS` means the checked contract is usable, `WARN` means usable with explicit limits such as `nav_semantic`, and `FAIL` means the result must not be used as reliable evidence for factual claims.
+- Schema drift fails closed even if a fallback returns rows. Diagnostics such as `schema_drift`, `no_rows`, `stale_data`, `future_data`, or `semantic_mismatch` should be resolved at the data source or routing layer before relying on the report.
 - Run the live acceptance matrix outside default CI when validating a release candidate:
   ```bash
   TRADINGAGENTS_CACHE_DIR=/private/tmp/tradingagents-china-smoke-cache \
