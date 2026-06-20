@@ -6,6 +6,7 @@ from tradingagents.agents.utils.agent_states import (
     InvestDebateState,
     RiskDebateState,
 )
+from tradingagents.dataflows.contracts import build_data_contract_status
 from tradingagents.dataflows.instruments import (
     MarketType,
     detect_instrument_type,
@@ -54,6 +55,7 @@ class Propagator:
             "market_type": resolved_market_type,
             "instrument_context": instrument_context,
             "trade_date": str(trade_date),
+            "data_contract_status": build_data_contract_status(),
             "past_context": past_context,
             "investment_debate_state": InvestDebateState(
                 {

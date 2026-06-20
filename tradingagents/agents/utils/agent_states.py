@@ -52,6 +52,7 @@ class AgentState(MessagesState):
     market_type: Annotated[str, "Market under analysis such as us, cn_a, hk, jp, or crypto"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]
     trade_date: Annotated[str, "What date we are trading at"]
+    data_contract_status: Annotated[dict, "Data contract gate status collected from tool outputs"]
 
     sender: Annotated[str, "Agent that sent this message"]
 

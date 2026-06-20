@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
@@ -171,6 +171,34 @@ class ContextAnchoredPlaceholderTests(unittest.TestCase):
         placeholder = result["messages"][-1]
         self.assertNotEqual(placeholder.content.strip(), "Continue")
         self.assertIn("EC", placeholder.content)
+
+    def test_collects_data_contract_status_before_deleting_messages(self):
+        gate_text = """## Verified Market Data Contract Gate
+
+- Status: PASS
+- Source: tiantian_fund_nav
+- Symbol: 012920
+- Semantic: nav
+- Expected semantic: nav
+- As of: 2026-05-22
+- Rows: 3
+
+### Warnings
+- WARNING nav_semantic: source=tiantian_fund_nav; This result is daily fund NAV.
+"""
+        result = create_msg_delete()(
+            {
+                "messages": [
+                    ToolMessage(content=gate_text, tool_call_id="call_1", id="tool_1"),
+                ],
+                "company_of_interest": "012920",
+                "trade_date": "2026-05-22",
+            }
+        )
+
+        self.assertEqual(result["data_contract_status"]["overall"], "warning")
+        self.assertEqual(result["data_contract_status"]["checks"][0]["semantic"], "nav")
+        self.assertEqual(result["data_contract_status"]["checks"][0]["warnings"], ["nav_semantic"])
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Literal
+from typing import Any, Iterable, Mapping, Literal
 
 import pandas as pd
 
@@ -15,6 +16,8 @@ DataSemantic = Literal[
     "news",
     "notice",
 ]
+
+DataContractOverall = Literal["not_checked", "pass", "warning", "fail"]
 
 
 @dataclass(frozen=True)
@@ -283,6 +286,188 @@ def render_contract_gate(gate: ContractGateResult, title: str = "Data Contract G
     return "\n".join(lines)
 
 
+def contract_gate_status(gate: ContractGateResult) -> dict[str, Any]:
+    """Convert a gate result into a JSON-serializable status check."""
+    return {
+        "status": "pass" if gate.ok else "fail",
+        "source": gate.result.meta.source,
+        "symbol": gate.result.meta.symbol,
+        "semantic": gate.result.meta.semantic,
+        "expected_semantic": gate.expected_semantic,
+        "as_of": gate.result.meta.as_of,
+        "rows": gate.result.rows,
+        "missing_reason": gate.result.missing_reason,
+        "error_type": gate.result.error_type,
+        "failures": [notice.code for notice in gate.failures],
+        "warnings": [notice.code for notice in gate.warnings],
+    }
+
+
+def build_data_contract_status(checks: Iterable[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+    """Build the shared state object for data-contract health."""
+    normalized_checks = [_normalize_status_check(check) for check in (checks or ())]
+    return {
+        "overall": _overall_status(normalized_checks),
+        "checks": normalized_checks,
+    }
+
+
+def merge_data_contract_status(
+    existing: Mapping[str, Any] | None,
+    checks: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Merge new gate checks into an existing state object, de-duplicating by content."""
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for check in list((existing or {}).get("checks") or []) + list(checks):
+        normalized = _normalize_status_check(check)
+        key = (
+            normalized.get("source"),
+            normalized.get("symbol"),
+            normalized.get("semantic"),
+            normalized.get("expected_semantic"),
+            normalized.get("as_of"),
+            normalized.get("status"),
+            tuple(normalized.get("failures") or ()),
+            tuple(normalized.get("warnings") or ()),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
+    return build_data_contract_status(merged)
+
+
+def parse_contract_gate_status(text: str) -> list[dict[str, Any]]:
+    """Parse rendered contract-gate Markdown back into compact status checks."""
+    if not isinstance(text, str) or "Contract Gate" not in text:
+        return []
+
+    checks: list[dict[str, Any]] = []
+    for block in _contract_gate_blocks(text):
+        check: dict[str, Any] = {
+            "status": "pass",
+            "source": None,
+            "symbol": None,
+            "semantic": None,
+            "expected_semantic": None,
+            "as_of": None,
+            "rows": None,
+            "missing_reason": None,
+            "error_type": None,
+            "failures": [],
+            "warnings": [],
+        }
+        for line in block.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- Status:"):
+                raw = stripped.split(":", 1)[1].strip().lower()
+                check["status"] = "fail" if raw == "fail" else "pass"
+            elif stripped.startswith("- Source:"):
+                check["source"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- Symbol:"):
+                check["symbol"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- Semantic:"):
+                check["semantic"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- Expected semantic:"):
+                check["expected_semantic"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- As of:"):
+                check["as_of"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- Rows:"):
+                rows = _clean_gate_value(stripped)
+                check["rows"] = int(rows) if rows and rows.isdigit() else None
+            elif stripped.startswith("- Missing reason:"):
+                check["missing_reason"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- Error type:"):
+                check["error_type"] = _clean_gate_value(stripped)
+            elif stripped.startswith("- ERROR "):
+                code = _diagnostic_code(stripped)
+                if code:
+                    check["failures"].append(code)
+            elif stripped.startswith("- WARNING "):
+                code = _diagnostic_code(stripped)
+                if code:
+                    check["warnings"].append(code)
+        if check["failures"]:
+            check["status"] = "fail"
+        checks.append(_normalize_status_check(check))
+    return checks
+
+
+def collect_data_contract_status_from_messages(
+    messages: Iterable[Any],
+    existing: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Collect rendered contract gates from LangChain messages into state."""
+    checks: list[dict[str, Any]] = []
+    for message in messages or ():
+        content = _message_content_text(getattr(message, "content", None))
+        checks.extend(parse_contract_gate_status(content))
+    if not checks:
+        return dict(existing) if existing else None
+    return merge_data_contract_status(existing, checks)
+
+
+def render_data_contract_status(
+    status: Mapping[str, Any] | None,
+    *,
+    title: str = "## Data Reliability",
+    compact: bool = False,
+) -> str:
+    """Render state-level data reliability for CLI panels and saved reports."""
+    if not status:
+        return ""
+    checks = [_normalize_status_check(check) for check in (status.get("checks") or [])]
+    if not checks:
+        return ""
+
+    overall = _overall_status(checks)
+    label = {
+        "pass": "PASS",
+        "warning": "WARN",
+        "fail": "FAIL",
+        "not_checked": "NOT CHECKED",
+    }[overall]
+    failures = sum(len(check.get("failures") or ()) for check in checks)
+    warnings = sum(len(check.get("warnings") or ()) for check in checks)
+    lines = [
+        title,
+        "",
+        f"- Overall: {label}",
+        f"- Checks: {len(checks)}; failures={failures}; warnings={warnings}",
+    ]
+    if compact:
+        for check in checks[-3:]:
+            lines.append(f"- {_check_summary_line(check)}")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "",
+            "| Status | Source | Symbol | Semantic | As of | Rows | Diagnostics |",
+            "|---|---|---|---|---|---:|---|",
+        ]
+    )
+    for check in checks:
+        diagnostics = ", ".join((check.get("failures") or []) + (check.get("warnings") or [])) or "none"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _check_display_status(check),
+                    str(check.get("source") or "n/a"),
+                    str(check.get("symbol") or "n/a"),
+                    str(check.get("semantic") or "n/a"),
+                    str(check.get("as_of") or "n/a"),
+                    str(check.get("rows") if check.get("rows") is not None else "n/a"),
+                    diagnostics,
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
 def _render_gate_notices(notices: tuple[DataNotice, ...]) -> list[str]:
     lines = []
     for notice in notices:
@@ -292,6 +477,120 @@ def _render_gate_notices(notices: tuple[DataNotice, ...]) -> list[str]:
             f"- {notice.severity.upper()} {notice.code}:{source} {notice.message}{detail}".strip()
         )
     return lines
+
+
+def _normalize_status_check(check: Mapping[str, Any]) -> dict[str, Any]:
+    failures = [str(code) for code in (check.get("failures") or []) if code]
+    warnings = [str(code) for code in (check.get("warnings") or []) if code]
+    status = str(check.get("status") or "pass").lower()
+    if failures:
+        status = "fail"
+    elif status not in {"pass", "fail"}:
+        status = "pass"
+    rows = check.get("rows")
+    return {
+        "status": status,
+        "source": _none_if_na(check.get("source")),
+        "symbol": _none_if_na(check.get("symbol")),
+        "semantic": _none_if_na(check.get("semantic")),
+        "expected_semantic": _none_if_na(check.get("expected_semantic")),
+        "as_of": _none_if_na(check.get("as_of")),
+        "rows": int(rows) if isinstance(rows, str) and rows.isdigit() else rows,
+        "missing_reason": _none_if_na(check.get("missing_reason")),
+        "error_type": _none_if_na(check.get("error_type")),
+        "failures": failures,
+        "warnings": warnings,
+    }
+
+
+def _overall_status(checks: list[Mapping[str, Any]]) -> DataContractOverall:
+    if not checks:
+        return "not_checked"
+    if any(check.get("status") == "fail" or check.get("failures") for check in checks):
+        return "fail"
+    if any(check.get("warnings") for check in checks):
+        return "warning"
+    return "pass"
+
+
+def _contract_gate_blocks(text: str) -> list[str]:
+    lines = text.splitlines()
+    blocks: list[str] = []
+    current: list[str] = []
+    in_block = False
+    for line in lines:
+        if re.match(r"^## .*\bContract Gate\b", line):
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+            in_block = True
+            continue
+        if in_block and line.startswith("## ") and not line.startswith("### "):
+            blocks.append("\n".join(current))
+            current = []
+            in_block = False
+        if in_block:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    return blocks
+
+
+def _clean_gate_value(line: str) -> str | None:
+    value = line.split(":", 1)[1].strip()
+    return _none_if_na(value)
+
+
+def _none_if_na(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"n/a", "none", "null"}:
+        return None
+    return text
+
+
+def _diagnostic_code(line: str) -> str | None:
+    parts = line.split()
+    if len(parts) < 3:
+        return None
+    return parts[2].rstrip(":")
+
+
+def _message_content_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, Mapping):
+        return str(content.get("text") or content)
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, Mapping):
+                parts.append(str(item.get("text") or item))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _check_display_status(check: Mapping[str, Any]) -> str:
+    if check.get("status") == "fail" or check.get("failures"):
+        return "FAIL"
+    if check.get("warnings"):
+        return "WARN"
+    return "PASS"
+
+
+def _check_summary_line(check: Mapping[str, Any]) -> str:
+    diagnostics = ", ".join((check.get("failures") or []) + (check.get("warnings") or [])) or "none"
+    return (
+        f"{_check_display_status(check)} {check.get('semantic') or 'n/a'} "
+        f"{check.get('source') or 'n/a'} as_of={check.get('as_of') or 'n/a'} "
+        f"rows={check.get('rows') if check.get('rows') is not None else 'n/a'} "
+        f"diagnostics={diagnostics}"
+    )
 
 
 def _parse_date(value: str | date | None) -> pd.Timestamp | None:

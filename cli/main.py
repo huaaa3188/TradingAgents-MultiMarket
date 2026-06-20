@@ -42,6 +42,7 @@ from cli.utils import (
     select_shallow_thinking_agent,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.dataflows.contracts import render_data_contract_status
 from tradingagents.dataflows.instruments import (
     MarketType,
     detect_instrument_type,
@@ -106,6 +107,7 @@ class MessageBuffer:
         self.current_agent = None
         self.report_sections = {}
         self.selected_analysts = []
+        self.data_contract_status = None
         self._processed_message_ids = set()
 
     def init_for_analysis(self, selected_analysts):
@@ -141,6 +143,7 @@ class MessageBuffer:
         self.current_agent = None
         self.messages.clear()
         self.tool_calls.clear()
+        self.data_contract_status = None
         self._processed_message_ids.clear()
 
     def get_completed_reports_count(self):
@@ -182,6 +185,11 @@ class MessageBuffer:
             self.report_sections[section_name] = content
             self._update_current_report()
 
+    def update_data_contract_status(self, status):
+        if status:
+            self.data_contract_status = status
+            self._update_current_report()
+
     def _update_current_report(self):
         # For the panel display, only show the most recently updated section
         latest_section = None
@@ -207,12 +215,33 @@ class MessageBuffer:
             self.current_report = (
                 f"### {section_titles[latest_section]}\n{latest_content}"
             )
+        else:
+            self.current_report = None
+
+        contract_summary = render_data_contract_status(
+            self.data_contract_status,
+            title="### Data Reliability",
+            compact=True,
+        )
+        if contract_summary:
+            self.current_report = (
+                f"{contract_summary}\n\n{self.current_report}"
+                if self.current_report
+                else contract_summary
+            )
 
         # Update the final complete report
         self._update_final_report()
 
     def _update_final_report(self):
         report_parts = []
+
+        contract_summary = render_data_contract_status(
+            self.data_contract_status,
+            title="## Data Reliability",
+        )
+        if contract_summary:
+            report_parts.append(contract_summary)
 
         # Analyst Team Reports - use .get() to handle missing sections
         analyst_sections = ["market_report", "sentiment_report", "news_report", "fundamentals_report"]
@@ -741,6 +770,11 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
 
+    contract_summary = render_data_contract_status(final_state.get("data_contract_status"))
+    if contract_summary:
+        (save_path / "data_reliability.md").write_text(contract_summary, encoding="utf-8")
+        sections.append(contract_summary)
+
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
     analyst_parts = []
@@ -830,6 +864,10 @@ def display_complete_report(final_state):
     """Display the complete analysis report sequentially (avoids truncation)."""
     console.print()
     console.print(Rule("Complete Analysis Report", style="bold green"))
+
+    contract_summary = render_data_contract_status(final_state.get("data_contract_status"))
+    if contract_summary:
+        console.print(Panel(Markdown(contract_summary), title="Data Reliability", border_style="cyan", padding=(1, 2)))
 
     # I. Analyst Team Reports
     analysts = []
@@ -1257,6 +1295,8 @@ def run_analysis(
                 chunk,
                 wall_time_tracker=analyst_wall_time_tracker,
             )
+            if chunk.get("data_contract_status"):
+                message_buffer.update_data_contract_status(chunk["data_contract_status"])
 
             # Research Team - Handle Investment Debate State
             if chunk.get("investment_debate_state"):
@@ -1349,6 +1389,8 @@ def run_analysis(
         message_buffer.add_message("System", analyst_wall_time_tracker.format_summary())
 
         # Update final report sections
+        if final_state.get("data_contract_status"):
+            message_buffer.update_data_contract_status(final_state["data_contract_status"])
         for section in message_buffer.report_sections:
             if section in final_state:
                 message_buffer.update_report_section(section, final_state[section])

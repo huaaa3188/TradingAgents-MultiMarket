@@ -6,10 +6,16 @@ import pytest
 from tradingagents.dataflows.contracts import (
     DataResult,
     SourceMeta,
+    build_data_contract_status,
+    collect_data_contract_status_from_messages,
     data_notice,
+    merge_data_contract_status,
+    parse_contract_gate_status,
     render_contract_gate,
+    render_data_contract_status,
     validate_data_result,
 )
+from tradingagents.graph.propagation import Propagator
 
 
 def _result(
@@ -104,3 +110,48 @@ def test_gate_warns_for_nav_semantic_restrictions():
     rendered = render_contract_gate(gate)
     assert "Status: PASS" in rendered
     assert "daily fund NAV" in rendered
+
+
+@pytest.mark.unit
+def test_rendered_gate_can_be_collected_into_state_status():
+    gate = validate_data_result(
+        _result(semantic="nav"),
+        analysis_date="2026-05-22",
+        expected_semantic="nav",
+    )
+
+    checks = parse_contract_gate_status(render_contract_gate(gate, "Verified Market Data Contract Gate"))
+    status = merge_data_contract_status(build_data_contract_status(), checks)
+    summary = render_data_contract_status(status)
+
+    assert status["overall"] == "warning"
+    assert status["checks"][0]["semantic"] == "nav"
+    assert status["checks"][0]["warnings"] == ["nav_semantic"]
+    assert "## Data Reliability" in summary
+    assert "nav_semantic" in summary
+
+
+@pytest.mark.unit
+def test_collect_data_contract_status_from_messages_deduplicates_checks():
+    gate = validate_data_result(
+        _result(error_type="schema_drift", notices=(data_notice("schema_drift", "drift"),)),
+        analysis_date="2026-05-22",
+        expected_semantic="ohlcv",
+    )
+    rendered = render_contract_gate(gate, "Verified Market Data Contract Gate")
+
+    class Message:
+        content = rendered
+
+    status = collect_data_contract_status_from_messages([Message(), Message()])
+
+    assert status["overall"] == "fail"
+    assert len(status["checks"]) == 1
+    assert status["checks"][0]["failures"] == ["schema_drift"]
+
+
+@pytest.mark.unit
+def test_initial_graph_state_has_empty_data_contract_status():
+    state = Propagator().create_initial_state("COF", "2026-05-22")
+
+    assert state["data_contract_status"] == {"overall": "not_checked", "checks": []}

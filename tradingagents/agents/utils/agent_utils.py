@@ -28,6 +28,7 @@ from tradingagents.dataflows.instruments import (
     MarketType,
     detect_market_type,
 )
+from tradingagents.dataflows.contracts import collect_data_contract_status_from_messages
 from tradingagents.dataflows.symbol_utils import normalize_symbol
 
 # Public surface: the data tools are imported here so agents and the graph
@@ -381,7 +382,13 @@ def create_msg_delete():
                 f"{instrument_context} The analysis date is {trade_date}."
             )
         )
-        return {"messages": removal_operations + [placeholder]}
+        updates = {"messages": removal_operations + [placeholder]}
+        contract_status = collect_data_contract_status_from_messages(
+            messages,
+            existing=state.get("data_contract_status"),
+        )
+        if contract_status is not None:
+            updates["data_contract_status"] = contract_status
+        return updates
 
     return delete_messages
-

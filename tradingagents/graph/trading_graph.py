@@ -546,6 +546,7 @@ class TradingAgentsGraph:
             "instrument_type": final_state.get("instrument_type"),
             "market_type": final_state.get("market_type"),
             "trade_date": final_state["trade_date"],
+            "data_contract_status": final_state.get("data_contract_status"),
             "market_report": final_state["market_report"],
             "sentiment_report": final_state["sentiment_report"],
             "news_report": final_state["news_report"],
