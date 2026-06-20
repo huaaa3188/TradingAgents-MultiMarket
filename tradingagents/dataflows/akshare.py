@@ -14,7 +14,9 @@ from .contracts import (
     DataResult,
     SourceMeta,
     data_notice,
+    render_contract_gate,
     render_notices,
+    validate_data_result,
 )
 from .instruments import (
     InstrumentType,
@@ -159,7 +161,13 @@ def _render_stock_result(result: DataResult) -> str:
             "suspended. If trading data is missing, check alternative vendors or rely on the latest "
             "available history."
         )
-        return notice_text + render_notices(result.notices)
+        text = notice_text + render_notices(result.notices)
+        return _append_contract_gate(
+            text,
+            result,
+            analysis_date=end_date,
+            max_staleness_days=_date_window_days(start_date, end_date),
+        )
 
     csv_string = result.payload.to_csv(index=False)
     if result.meta.semantic == "nav":
@@ -172,7 +180,39 @@ def _render_stock_result(result: DataResult) -> str:
         header += f"# As of: {result.meta.as_of}\n"
     header += f"# Total records: {len(result.payload)}\n"
     header += f"# Data retrieved on: {result.meta.retrieved_at or _now_timestamp()}\n\n"
-    return header + csv_string + render_notices(result.notices)
+    text = header + csv_string + render_notices(result.notices)
+    return _append_contract_gate(
+        text,
+        result,
+        analysis_date=end_date,
+        max_staleness_days=_date_window_days(start_date, end_date),
+    )
+
+
+def _append_contract_gate(
+    text: str,
+    result: DataResult,
+    *,
+    analysis_date: str | None = None,
+    max_staleness_days: int | None = None,
+) -> str:
+    gate = validate_data_result(
+        result,
+        analysis_date=analysis_date,
+        expected_semantic=result.meta.semantic,
+        max_staleness_days=max_staleness_days,
+    )
+    return text + "\n\n" + render_contract_gate(gate, "AkShare Data Contract Gate")
+
+
+def _date_window_days(start_date: str | None, end_date: str | None) -> int | None:
+    if not start_date or not end_date:
+        return None
+    start = pd.to_datetime(start_date, errors="coerce")
+    end = pd.to_datetime(end_date, errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        return None
+    return max(0, int((end - start).days))
 
 
 @akshare_disk_cache(expire=14400)
@@ -192,13 +232,20 @@ def get_indicator(
     try:
         end_dt = pd.to_datetime(curr_date)
         start_dt = end_dt - pd.DateOffset(days=max(look_back_days, 250))
-        data = _load_ohlcv(
+        ohlcv_result = _load_ohlcv_result(
             symbol,
             start_dt.strftime("%Y-%m-%d"),
             curr_date,
         )
+        data = ohlcv_result.payload if isinstance(ohlcv_result.payload, pd.DataFrame) else pd.DataFrame()
         if data.empty:
-            return f"No AkShare OHLCV data found for {symbol} up to {curr_date}"
+            text = f"No AkShare OHLCV data found for {symbol} up to {curr_date}"
+            return _append_contract_gate(
+                text,
+                ohlcv_result,
+                analysis_date=curr_date,
+                max_staleness_days=look_back_days,
+            )
 
         df = data.rename(columns=str.lower)
         df["date"] = pd.to_datetime(df["date"])
@@ -226,7 +273,12 @@ def get_indicator(
                 "\n\nFund NAV note: this indicator is computed from daily fund net asset value, "
                 "not exchange-traded OHLCV. Volume-derived indicators are not meaningful for OTC mutual funds."
             )
-        return result
+        return _append_contract_gate(
+            result,
+            ohlcv_result,
+            analysis_date=curr_date,
+            max_staleness_days=look_back_days,
+        )
     except AkShareDataError:
         raise
     except Exception as e:
@@ -235,7 +287,8 @@ def get_indicator(
 
 @akshare_disk_cache(expire=14400)
 def get_fundamentals(ticker: str, curr_date: Optional[str] = None) -> str:
-    return _get_fundamentals_result(ticker, curr_date).text or ""
+    result = _get_fundamentals_result(ticker, curr_date)
+    return _append_contract_gate(result.text or "", result, analysis_date=curr_date)
 
 
 def get_fundamentals_result(ticker: str, curr_date: Optional[str] = None) -> DataResult:
@@ -273,7 +326,13 @@ def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: Option
 
 @akshare_disk_cache(expire=14400)
 def get_news(ticker: str, start_date: str, end_date: str) -> str:
-    return _get_news_result(ticker, start_date, end_date).text or ""
+    result = _get_news_result(ticker, start_date, end_date)
+    return _append_contract_gate(
+        result.text or "",
+        result,
+        analysis_date=end_date,
+        max_staleness_days=_date_window_days(start_date, end_date),
+    )
 
 
 def get_news_result(ticker: str, start_date: str, end_date: str) -> DataResult:

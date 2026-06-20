@@ -8,6 +8,7 @@ import tradingagents.default_config as default_config
 from tradingagents.dataflows import akshare, tiantian_fund
 from tradingagents.dataflows import cache as dataflow_cache
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.contracts import parse_contract_gate_status
 from tradingagents.dataflows.interface import route_to_vendor
 
 
@@ -233,6 +234,9 @@ def test_get_stock_routes_cn_otc_fund_nav(monkeypatch):
     assert "Tiantian Fund NAV data for 012920" in result
     assert "Date,Open,High,Low,Close,Volume" in result
     assert "2026-01-03" in result
+    checks = parse_contract_gate_status(result)
+    assert checks[0]["semantic"] == "nav"
+    assert checks[0]["warnings"] == ["nav_semantic"]
 
 
 def test_get_stock_contract_marks_cn_otc_fund_as_nav(monkeypatch):
@@ -269,6 +273,26 @@ def test_get_stock_contract_records_schema_drift_before_fallback(monkeypatch):
     assert result.meta.source == "sina_stock_zh_a_daily"
 
 
+def test_get_stock_output_marks_schema_drift_gate_failed(monkeypatch):
+    class FakeAkShareWithDriftedEastmoney(FakeAkShare):
+        def stock_zh_a_hist(self, **kwargs):
+            self.calls.append(("stock_zh_a_hist", kwargs))
+            return pd.DataFrame(
+                [
+                    {"日期": "2026-01-01", "开盘": 10, "最高": 11, "最低": 9, "成交量": 1000},
+                ]
+            )
+
+    fake = FakeAkShareWithDriftedEastmoney()
+    monkeypatch.setattr(akshare, "_ak", lambda: fake)
+
+    result = akshare.get_stock("600519", "2026-01-01", "2026-01-03")
+
+    checks = parse_contract_gate_status(result)
+    assert checks[0]["status"] == "fail"
+    assert checks[0]["failures"] == ["schema_drift"]
+
+
 def test_get_stock_contract_marks_empty_data_with_missing_reason(monkeypatch):
     monkeypatch.setattr(
         akshare,
@@ -301,6 +325,9 @@ def test_get_indicator_uses_cn_otc_fund_nav(monkeypatch):
     assert "## rsi values" in result
     assert "Fund NAV note" in result
     assert "RSI:" in result
+    checks = parse_contract_gate_status(result)
+    assert checks[0]["semantic"] == "nav"
+    assert checks[0]["warnings"] == ["nav_semantic"]
 
 
 def test_get_fundamentals_returns_fund_profile(monkeypatch):
@@ -314,6 +341,8 @@ def test_get_fundamentals_returns_fund_profile(monkeypatch):
     assert "管理费率" in result
     assert "贵州茅台" in result
     assert ("fund_portfolio_hold_em", {"symbol": "510300", "date": "2026"}) in fake.calls
+    checks = parse_contract_gate_status(result)
+    assert checks[0]["semantic"] == "fund_profile"
 
 
 def test_get_fundamentals_returns_cn_otc_fund_profile(monkeypatch):
@@ -337,6 +366,8 @@ def test_get_fundamentals_returns_cn_otc_fund_profile(monkeypatch):
     assert "易方达全球成长精选混合(QDII)人民币A" in result
     assert "NAV trend" in result
     assert "AkShare Fund Overview" not in result
+    checks = parse_contract_gate_status(result)
+    assert checks[0]["semantic"] == "fund_profile"
 
 
 def test_get_fundamentals_contract_reports_missing_otc_profile():
@@ -385,6 +416,9 @@ def test_fund_news_uses_fund_announcements_not_stock_news(monkeypatch):
     assert "基金定期报告" in result
     assert "fund_announcement_report_em" in call_names
     assert "stock_news_em" not in call_names
+    checks = parse_contract_gate_status(result)
+    assert checks[0]["semantic"] == "news"
+    assert checks[0]["status"] == "pass"
 
 
 def test_news_contract_carries_fund_announcement_metadata(monkeypatch):
