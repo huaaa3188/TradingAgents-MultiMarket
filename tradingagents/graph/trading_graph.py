@@ -6,7 +6,7 @@ import os
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
@@ -229,7 +229,7 @@ class TradingAgentsGraph:
                 return benchmark
         return benchmark_map.get("", "SPY")
 
-    def _get_runtime_dataflow_config(self, ticker: str) -> Dict[str, Any]:
+    def _get_runtime_dataflow_config(self, ticker: str) -> dict[str, Any]:
         """Resolve per-run vendor defaults without mutating the instance config."""
         if detect_market_type(ticker) not in (MarketType.CN_A, MarketType.CN_FUND):
             return self.config
@@ -279,7 +279,7 @@ class TradingAgentsGraph:
         trade_date: str,
         holding_days: int = 5,
         benchmark: str = "SPY",
-    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+    ) -> tuple[float | None, float | None, int | None]:
         from tradingagents.dataflows.symbol_utils import normalize_symbol
 
         try:
@@ -309,7 +309,7 @@ class TradingAgentsGraph:
         trade_date: str,
         holding_days: int = 5,
         benchmark: str = "SPY",
-    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+    ) -> tuple[float | None, float | None, int | None]:
         try:
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 10)  # China holidays need a wider buffer
@@ -348,7 +348,7 @@ class TradingAgentsGraph:
         stock: Any,
         bench: Any,
         holding_days: int,
-    ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+    ) -> tuple[float | None, float | None, int | None]:
         if stock is None or bench is None or len(stock) < 2 or len(bench) < 2:
             return None, None, None
 

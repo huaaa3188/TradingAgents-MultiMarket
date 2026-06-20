@@ -15,19 +15,19 @@ from __future__ import annotations
 import argparse
 import copy
 import sys
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable, Sequence
 
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import cache as dataflow_cache
-from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.akshare import (
     get_fundamentals_result,
     get_news_result,
     get_stock_result,
 )
+from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.contracts import validate_data_result
 from tradingagents.dataflows.instruments import (
     InstrumentType,
@@ -39,7 +39,6 @@ from tradingagents.dataflows.instruments import (
 from tradingagents.dataflows.interface import route_to_vendor
 from tradingagents.dataflows.market_data_validator import build_verified_market_snapshot
 from tradingagents.graph.propagation import Propagator
-
 
 STATUS_OK = "OK"
 STATUS_WARN = "WARN"

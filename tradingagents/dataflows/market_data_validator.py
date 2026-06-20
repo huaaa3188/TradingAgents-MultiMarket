@@ -16,8 +16,16 @@ import pandas as pd
 from stockstats import wrap
 
 from tradingagents.dataflows.akshare import get_stock_result
-from tradingagents.dataflows.contracts import ContractGateResult, render_contract_gate, validate_data_result
-from tradingagents.dataflows.instruments import MarketType, detect_market_type, normalize_ticker_symbol
+from tradingagents.dataflows.contracts import (
+    ContractGateResult,
+    render_contract_gate,
+    validate_data_result,
+)
+from tradingagents.dataflows.instruments import (
+    MarketType,
+    detect_market_type,
+    normalize_ticker_symbol,
+)
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
 
 # A fixed, common indicator set so the snapshot is the same shape every run.

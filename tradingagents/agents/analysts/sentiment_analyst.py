@@ -40,9 +40,9 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.instruments import MarketType
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
-from tradingagents.dataflows.instruments import MarketType
 
 
 def _seven_days_back(trade_date: str) -> str:

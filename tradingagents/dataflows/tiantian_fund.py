@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 import requests
@@ -12,7 +12,6 @@ from parsel import Selector
 
 from .cache import disk_cache
 from .contracts import DataResult, SourceMeta, data_notice
-
 
 DETAIL_URL = "https://fund.eastmoney.com/pingzhongdata/{symbol}.js"
 HOLDINGS_URL = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx"
@@ -32,7 +31,7 @@ class TiantianTable:
 
 def get_fund_profile_tables_result(
     symbol: str,
-    curr_date: Optional[str] = None,
+    curr_date: str | None = None,
     holdings_limit: int = 10,
 ) -> DataResult:
     code = _pure_fund_code(symbol)
@@ -80,7 +79,7 @@ def get_fund_profile_tables_result(
 @disk_cache("tiantian_fund", expire=86400)
 def get_fund_profile_tables(
     symbol: str,
-    curr_date: Optional[str] = None,
+    curr_date: str | None = None,
     holdings_limit: int = 10,
 ) -> list[TiantianTable]:
     code = _pure_fund_code(symbol)
@@ -99,8 +98,8 @@ def get_fund_profile_tables(
 
 def get_fund_nav_history_result(
     symbol: str,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> DataResult:
     code = _pure_fund_code(symbol)
     try:
@@ -147,8 +146,8 @@ def get_fund_nav_history_result(
 @disk_cache("tiantian_fund", expire=14400)
 def get_fund_nav_history(
     symbol: str,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> pd.DataFrame:
     """Return daily fund NAV history as OHLCV-shaped rows for tool compatibility."""
     code = _pure_fund_code(symbol)
@@ -160,7 +159,7 @@ def get_fund_nav_history(
     return data
 
 
-def _http_get_text(url: str, params: Optional[dict[str, Any]] = None) -> str:
+def _http_get_text(url: str, params: dict[str, Any] | None = None) -> str:
     try:
         response = requests.get(
             url,
@@ -181,7 +180,7 @@ def _http_get_text(url: str, params: Optional[dict[str, Any]] = None) -> str:
 def _parse_detail_script(
     script: str,
     symbol: str,
-    curr_date: Optional[str],
+    curr_date: str | None,
 ) -> list[TiantianTable]:
     values = {
         name: _extract_js_var(script, name)
@@ -215,7 +214,7 @@ def _parse_detail_script(
     return [table for table in tables if not table.data.empty]
 
 
-def _safe_fetch_top_holdings(symbol: str, curr_date: Optional[str], holdings_limit: int) -> pd.DataFrame:
+def _safe_fetch_top_holdings(symbol: str, curr_date: str | None, holdings_limit: int) -> pd.DataFrame:
     years = _candidate_holding_years(curr_date)
     for year in years:
         try:
@@ -237,7 +236,7 @@ def _safe_fetch_top_holdings(symbol: str, curr_date: Optional[str], holdings_lim
     return pd.DataFrame()
 
 
-def _parse_holdings_response(text: str, curr_date: Optional[str]) -> pd.DataFrame:
+def _parse_holdings_response(text: str, curr_date: str | None) -> pd.DataFrame:
     content = _extract_js_object_string_property(text, "content")
     if not content:
         return pd.DataFrame()
@@ -299,7 +298,7 @@ def _return_frame(values: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _latest_nav_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.DataFrame:
+def _latest_nav_frame(values: dict[str, Any], curr_date: str | None) -> pd.DataFrame:
     rows = []
     for item in values.get("Data_netWorthTrend") or []:
         if not isinstance(item, dict) or "x" not in item:
@@ -321,8 +320,8 @@ def _latest_nav_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.Da
 
 def _nav_history_frame(
     trend: Any,
-    start_date: Optional[str],
-    end_date: Optional[str],
+    start_date: str | None,
+    end_date: str | None,
 ) -> pd.DataFrame:
     rows = []
     for item in trend or []:
@@ -359,7 +358,7 @@ def _nav_history_frame(
     return data
 
 
-def _scale_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.DataFrame:
+def _scale_frame(values: dict[str, Any], curr_date: str | None) -> pd.DataFrame:
     data = values.get("Data_fluctuationScale")
     if not isinstance(data, dict):
         return pd.DataFrame()
@@ -382,7 +381,7 @@ def _scale_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.DataFra
     return _latest_by_date(pd.DataFrame(rows), "日期", curr_date, limit=5)
 
 
-def _series_frame(data: Any, curr_date: Optional[str]) -> pd.DataFrame:
+def _series_frame(data: Any, curr_date: str | None) -> pd.DataFrame:
     if not isinstance(data, dict):
         return pd.DataFrame()
     categories = data.get("categories") or []
@@ -401,7 +400,7 @@ def _series_frame(data: Any, curr_date: Optional[str]) -> pd.DataFrame:
     return _latest_by_date(pd.DataFrame(rows), "日期", curr_date, limit=5)
 
 
-def _manager_frame(values: dict[str, Any], curr_date: Optional[str]) -> pd.DataFrame:
+def _manager_frame(values: dict[str, Any], curr_date: str | None) -> pd.DataFrame:
     rows = []
     for manager in values.get("Data_currentFundManager") or []:
         if not isinstance(manager, dict):
@@ -512,7 +511,7 @@ def _parse_js_literal(literal: str) -> Any:
     return json.loads(literal)
 
 
-def _candidate_holding_years(curr_date: Optional[str]) -> list[int]:
+def _candidate_holding_years(curr_date: str | None) -> list[int]:
     base_year = pd.to_datetime(curr_date).year if curr_date else datetime.now().year
     return [base_year, base_year - 1]
 
@@ -525,7 +524,7 @@ def _extract_cutoff_date(content: str) -> str:
 def _latest_by_date(
     data: pd.DataFrame,
     date_column: str,
-    curr_date: Optional[str],
+    curr_date: str | None,
     limit: int,
 ) -> pd.DataFrame:
     if data.empty or date_column not in data.columns:
@@ -536,7 +535,7 @@ def _latest_by_date(
     if curr_date:
         result = result[result["_parsed_date"] <= pd.to_datetime(curr_date)]
     if result.empty:
-        return pd.DataFrame(columns=[c for c in data.columns])
+        return pd.DataFrame(columns=list(data.columns))
     result = result.sort_values("_parsed_date", ascending=False).head(limit)
     return result.drop(columns=["_parsed_date"])
 
@@ -594,7 +593,7 @@ def _skip_ws(text: str, start: int) -> int:
     return start
 
 
-def _clean_text(value: Optional[str]) -> str:
+def _clean_text(value: str | None) -> str:
     if value is None:
         return ""
     return re.sub(r"\s+", "", value)

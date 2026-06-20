@@ -5,8 +5,7 @@ import pytest
 from diskcache import Cache
 
 import tradingagents.default_config as default_config
-from tradingagents.dataflows import akshare, tiantian_fund
-from tradingagents.dataflows import cache as dataflow_cache
+from tradingagents.dataflows import akshare, cache as dataflow_cache, tiantian_fund
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.contracts import parse_contract_gate_status
 from tradingagents.dataflows.interface import route_to_vendor
@@ -1060,12 +1059,12 @@ def test_akshare_cache_lazy_loads_under_configured_cache_dir(monkeypatch, tmp_pa
 def test_bj_stock_routing_and_prefixes(monkeypatch):
     from tradingagents.dataflows import akshare
     from tradingagents.dataflows.instruments import (
-        normalize_ticker_symbol,
-        detect_market_type,
-        detect_instrument_type,
-        to_akshare_symbol,
-        MarketType,
         InstrumentType,
+        MarketType,
+        detect_instrument_type,
+        detect_market_type,
+        normalize_ticker_symbol,
+        to_akshare_symbol,
     )
 
     # 1. 验证 830833 (北交所股票) 的识别与规范化

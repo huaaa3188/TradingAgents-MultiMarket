@@ -5,12 +5,12 @@ import os
 import re
 import sys
 from collections import Counter
-from typing import Callable
+from collections.abc import Callable
+from contextlib import suppress
 
 from diskcache import Cache
 
 from .config import get_config
-
 
 _UNINITIALIZED_CACHE = object()
 _CACHES: dict[str, object] = {}
@@ -137,7 +137,5 @@ def _validate_namespace(namespace: str) -> None:
 def _close_cache(cache_obj) -> None:
     close = getattr(cache_obj, "close", None)
     if callable(close):
-        try:
+        with suppress(Exception):
             close()
-        except Exception:
-            pass

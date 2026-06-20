@@ -4,7 +4,6 @@ import time
 from collections import deque
 from functools import wraps
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich import box
@@ -20,6 +19,7 @@ from rich.table import Table
 from rich.text import Text
 
 from cli.announcements import display_announcements, fetch_announcements
+from cli.models import AnalystType as AnalystType
 from cli.stats_handler import StatsCallbackHandler
 from cli.utils import (
     ask_anthropic_effort,
@@ -41,21 +41,20 @@ from cli.utils import (
     select_research_depth,
     select_shallow_thinking_agent,
 )
-from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.dataflows.contracts import render_data_contract_status
 from tradingagents.dataflows.instruments import (
     MarketType,
     detect_instrument_type,
     detect_market_type,
 )
+from tradingagents.dataflows.interface import VENDOR_LIST
+from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
     AnalystWallTimeTracker,
     build_analyst_execution_plan,
     get_initial_analyst_node,
     sync_analyst_tracker_from_chunk,
 )
-from cli.models import AnalystType
-from tradingagents.dataflows.interface import VENDOR_LIST
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 console = Console()
@@ -1106,8 +1105,8 @@ def _resolve_data_vendor_override(selections: dict, data_vendors: str = None) ->
 def run_analysis(
     checkpoint: bool = False,
     data_vendors: str = None,
-    save_report: Optional[bool] = None,
-    display_report: Optional[bool] = None,
+    save_report: bool | None = None,
+    display_report: bool | None = None,
 ):
     # First get all user selections
     selections = get_user_selections()
@@ -1131,7 +1130,7 @@ def run_analysis(
         _apply_data_vendor_override(config, resolved_data_vendors)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
@@ -1445,12 +1444,12 @@ def analyze(
         "--data-vendors",
         help="Comma-separated data vendor fallback chain, e.g. akshare,yfinance.",
     ),
-    save_report: Optional[bool] = typer.Option(
+    save_report: bool | None = typer.Option(
         None,
         "--save-report/--no-save-report",
         help="Save the complete report without prompting, or disable report saving.",
     ),
-    display_report: Optional[bool] = typer.Option(
+    display_report: bool | None = typer.Option(
         None,
         "--display-report/--no-display-report",
         help="Display the complete report without prompting, or disable full report display.",

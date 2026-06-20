@@ -4,8 +4,7 @@ import requests
 from diskcache import Cache
 
 import tradingagents.default_config as default_config
-from tradingagents.dataflows import akshare, tiantian_fund
-from tradingagents.dataflows import cache as dataflow_cache
+from tradingagents.dataflows import akshare, cache as dataflow_cache, tiantian_fund
 from tradingagents.dataflows.config import set_config
 
 

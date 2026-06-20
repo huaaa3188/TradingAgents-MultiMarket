@@ -1,5 +1,17 @@
 import logging
 
+from .akshare import (
+    AkShareDataError,
+    get_balance_sheet as get_akshare_balance_sheet,
+    get_cashflow as get_akshare_cashflow,
+    get_fundamentals as get_akshare_fundamentals,
+    get_global_news as get_akshare_global_news,
+    get_income_statement as get_akshare_income_statement,
+    get_indicator as get_akshare_indicator,
+    get_insider_transactions as get_akshare_insider_transactions,
+    get_news as get_akshare_news,
+    get_stock as get_akshare_stock,
+)
 from .alpha_vantage import (
     get_balance_sheet as get_alpha_vantage_balance_sheet,
     get_cashflow as get_alpha_vantage_cashflow,
@@ -10,18 +22,6 @@ from .alpha_vantage import (
     get_insider_transactions as get_alpha_vantage_insider_transactions,
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
-)
-from .akshare import (
-    AkShareDataError,
-    get_balance_sheet as get_akshare_balance_sheet,
-    get_cashflow as get_akshare_cashflow,
-    get_fundamentals as get_akshare_fundamentals,
-    get_global_news as get_akshare_global_news,
-    get_indicator as get_akshare_indicator,
-    get_income_statement as get_akshare_income_statement,
-    get_insider_transactions as get_akshare_insider_transactions,
-    get_news as get_akshare_news,
-    get_stock as get_akshare_stock,
 )
 from .config import get_config
 from .errors import (

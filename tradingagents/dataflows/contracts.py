@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Iterable, Mapping, Literal
+from typing import Any, Literal
 
 import pandas as pd
-
 
 DataSemantic = Literal[
     "ohlcv",
@@ -67,7 +67,7 @@ class DataResult:
             return 0
         return 1
 
-    def with_text(self, text: str) -> "DataResult":
+    def with_text(self, text: str) -> DataResult:
         return DataResult(
             meta=self.meta,
             payload=self.payload,

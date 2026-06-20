@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 
 from tradingagents.dataflows.config import get_config
 
-
 # ---------------------------------------------------------------------------
 # Shared rating types
 # ---------------------------------------------------------------------------

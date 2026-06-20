@@ -2,9 +2,9 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.utils.agent_utils import (
     append_fund_semantic_warning,
+    get_global_news,
     get_instrument_context_from_state,
     get_instrument_target_label,
-    get_global_news,
     get_language_instruction,
     get_macro_indicators,
     get_news,

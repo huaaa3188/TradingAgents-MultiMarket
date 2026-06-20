@@ -1,3 +1,4 @@
+from contextlib import suppress
 from unittest.mock import MagicMock
 
 import tradingagents.default_config as default_config
@@ -261,11 +262,9 @@ def test_news_analyst_prompt_adapts_for_fund():
         "messages": [],
     }
 
-    try:
+    # node 在 chain.invoke 时可能报错，我们只需拦截 mock_llm 的传参即可
+    with suppress(Exception):
         node(state)
-    except Exception:
-        # node 在 chain.invoke 时可能报错，我们只需拦截 mock_llm 的传参即可
-        pass
 
     assert mock_llm.called
     args, kwargs = mock_llm.call_args
@@ -292,10 +291,8 @@ def test_news_analyst_prompt_adapts_for_cn_otc_fund():
         "messages": [],
     }
 
-    try:
+    with suppress(Exception):
         node(state)
-    except Exception:
-        pass
 
     assert mock_llm.called
     args, kwargs = mock_llm.call_args

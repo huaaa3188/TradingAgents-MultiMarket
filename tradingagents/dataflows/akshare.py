@@ -1,8 +1,8 @@
-from datetime import datetime
 import queue
+import sys
 import threading
 import time
-from typing import Optional
+from datetime import datetime
 
 import pandas as pd
 from stockstats import wrap
@@ -20,16 +20,13 @@ from .contracts import (
 )
 from .instruments import (
     InstrumentType,
+    MarketType,
     detect_instrument_type,
     detect_market_type,
-    MarketType,
     normalize_ticker_symbol,
     to_akshare_symbol,
 )
 from .tiantian_fund import get_fund_nav_history, get_fund_profile_tables
-
-
-import sys
 
 _MACRO_NEWS_TOTAL_BUDGET_SECONDS = 15
 _MACRO_NEWS_SOURCE_TIMEOUT_SECONDS = 12
@@ -286,17 +283,17 @@ def get_indicator(
 
 
 @akshare_disk_cache(expire=14400)
-def get_fundamentals(ticker: str, curr_date: Optional[str] = None) -> str:
+def get_fundamentals(ticker: str, curr_date: str | None = None) -> str:
     result = _get_fundamentals_result(ticker, curr_date)
     return _append_contract_gate(result.text or "", result, analysis_date=curr_date)
 
 
-def get_fundamentals_result(ticker: str, curr_date: Optional[str] = None) -> DataResult:
+def get_fundamentals_result(ticker: str, curr_date: str | None = None) -> DataResult:
     """Return structured China fundamentals/profile data."""
     return _get_fundamentals_result(ticker, curr_date)
 
 
-def _get_fundamentals_result(ticker: str, curr_date: Optional[str] = None) -> DataResult:
+def _get_fundamentals_result(ticker: str, curr_date: str | None = None) -> DataResult:
     normalized = normalize_ticker_symbol(ticker)
     if detect_instrument_type(normalized) == InstrumentType.FUND:
         return _get_fund_profile_result(normalized, curr_date)
@@ -304,21 +301,21 @@ def _get_fundamentals_result(ticker: str, curr_date: Optional[str] = None) -> Da
 
 
 @akshare_disk_cache(expire=14400)
-def get_balance_sheet(ticker: str, freq: str = "quarterly", curr_date: Optional[str] = None) -> str:
+def get_balance_sheet(ticker: str, freq: str = "quarterly", curr_date: str | None = None) -> str:
     if detect_instrument_type(ticker) == InstrumentType.FUND:
         return _fund_statement_not_applicable(ticker, "balance sheet")
     return _financial_statement(ticker, "balance_sheet", freq, curr_date)
 
 
 @akshare_disk_cache(expire=14400)
-def get_cashflow(ticker: str, freq: str = "quarterly", curr_date: Optional[str] = None) -> str:
+def get_cashflow(ticker: str, freq: str = "quarterly", curr_date: str | None = None) -> str:
     if detect_instrument_type(ticker) == InstrumentType.FUND:
         return _fund_statement_not_applicable(ticker, "cash flow statement")
     return _financial_statement(ticker, "cashflow", freq, curr_date)
 
 
 @akshare_disk_cache(expire=14400)
-def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: Optional[str] = None) -> str:
+def get_income_statement(ticker: str, freq: str = "quarterly", curr_date: str | None = None) -> str:
     if detect_instrument_type(ticker) == InstrumentType.FUND:
         return _fund_statement_not_applicable(ticker, "income statement")
     return _financial_statement(ticker, "income_statement", freq, curr_date)
@@ -528,7 +525,7 @@ def _get_news_result(ticker: str, start_date: str, end_date: str) -> DataResult:
         raise AkShareDataError(f"Error fetching AkShare news for {ticker}: {str(e)}") from e
 
 
-def get_global_news(curr_date: str, look_back_days: Optional[int] = None, limit: Optional[int] = None) -> str:
+def get_global_news(curr_date: str, look_back_days: int | None = None, limit: int | None = None) -> str:
     config = get_config()
     if look_back_days is None:
         look_back_days = config["global_news_lookback_days"]
@@ -796,7 +793,7 @@ def _normalize_ohlcv(data: pd.DataFrame, start_date: str, end_date: str) -> pd.D
 
 def _ohlcv_empty_notice(
     source_name: str,
-    raw: Optional[pd.DataFrame],
+    raw: pd.DataFrame | None,
     start_date: str,
     end_date: str,
 ) -> DataNotice | None:
@@ -870,11 +867,11 @@ def _now_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _get_fund_profile(ticker: str, curr_date: Optional[str]) -> str:
+def _get_fund_profile(ticker: str, curr_date: str | None) -> str:
     return _get_fund_profile_result(ticker, curr_date).text or ""
 
 
-def _get_fund_profile_result(ticker: str, curr_date: Optional[str]) -> DataResult:
+def _get_fund_profile_result(ticker: str, curr_date: str | None) -> DataResult:
     pure_symbol = to_akshare_symbol(ticker)
     is_otc_fund = detect_market_type(ticker) == MarketType.CN_FUND
     title = "China OTC Fund Profile" if is_otc_fund else "Listed Fund Profile"
@@ -963,11 +960,11 @@ def _get_fund_profile_result(ticker: str, curr_date: Optional[str]) -> DataResul
     )
 
 
-def _get_equity_profile(ticker: str, curr_date: Optional[str]) -> str:
+def _get_equity_profile(ticker: str, curr_date: str | None) -> str:
     return _get_equity_profile_result(ticker, curr_date).text or ""
 
 
-def _get_equity_profile_result(ticker: str, curr_date: Optional[str]) -> DataResult:
+def _get_equity_profile_result(ticker: str, curr_date: str | None) -> DataResult:
     ak = _ak()
     symbol = to_akshare_symbol(ticker)
     retrieved_at = _now_timestamp()
@@ -1003,7 +1000,7 @@ def _get_equity_profile_result(ticker: str, curr_date: Optional[str]) -> DataRes
     )
 
 
-def _financial_statement(ticker: str, statement: str, freq: str, curr_date: Optional[str]) -> str:
+def _financial_statement(ticker: str, statement: str, freq: str, curr_date: str | None) -> str:
     ak = _ak()
     symbol = _to_akshare_statement_symbol(ticker)
     fn_name = {
@@ -1045,7 +1042,7 @@ def _fund_context_hint(ticker: str) -> str:
     return "China market, benchmark/theme, liquidity, premium/discount, fees, and holdings context"
 
 
-def _filter_statement_by_date(data: Optional[pd.DataFrame], curr_date: Optional[str]) -> pd.DataFrame:
+def _filter_statement_by_date(data: pd.DataFrame | None, curr_date: str | None) -> pd.DataFrame:
     if data is None or data.empty or not curr_date:
         return pd.DataFrame() if data is None else data
     result = data.copy()
@@ -1203,7 +1200,7 @@ def _is_macro_news_source_in_cooldown(source_name: str) -> bool:
     return True
 
 
-def _get_macro_news_disabled_until(source_name: str) -> Optional[float]:
+def _get_macro_news_disabled_until(source_name: str) -> float | None:
     active_cache = _get_cache()
     key = _macro_news_source_health_key(source_name)
     if active_cache is not None:
@@ -1260,7 +1257,7 @@ def _is_historical_macro_news_date(end_date: str) -> bool:
     return requested < pd.Timestamp.now().normalize()
 
 
-def _normalize_news_frame(data: Optional[pd.DataFrame], source_name: str) -> pd.DataFrame:
+def _normalize_news_frame(data: pd.DataFrame | None, source_name: str) -> pd.DataFrame:
     if data is None or data.empty:
         return pd.DataFrame(columns=["标题", "来源", "发布时间", "摘要", "链接"])
 
@@ -1305,7 +1302,7 @@ def _normalize_news_frame(data: Optional[pd.DataFrame], source_name: str) -> pd.
     return pd.DataFrame(rows)
 
 
-def _render_table_like(title: str, data: Optional[pd.DataFrame], max_rows: int = 12) -> list[str]:
+def _render_table_like(title: str, data: pd.DataFrame | None, max_rows: int = 12) -> list[str]:
     if data is None or data.empty:
         return [f"## {title}", "No data available.", ""]
     return [f"## {title}", data.head(max_rows).to_csv(index=False), ""]
@@ -1342,7 +1339,7 @@ def _safe_call(func):
         return pd.DataFrame()
 
 
-def _safe_tiantian_fund_tables(symbol: str, curr_date: Optional[str]):
+def _safe_tiantian_fund_tables(symbol: str, curr_date: str | None):
     try:
         return get_fund_profile_tables(symbol, curr_date)
     except Exception:
@@ -1399,7 +1396,7 @@ def _to_akshare_index_symbol(symbol: str) -> str:
     return normalized
 
 
-def _fund_holdings_year(curr_date: Optional[str]) -> str:
+def _fund_holdings_year(curr_date: str | None) -> str:
     if not curr_date:
         return str(datetime.now().year)
     return str(pd.to_datetime(curr_date).year)

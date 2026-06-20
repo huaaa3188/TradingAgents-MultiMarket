@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 import tradingagents.default_config as default_config
+from scripts import smoke_akshare_live as smoke
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.contracts import DataResult, SourceMeta, data_notice
-from scripts import smoke_akshare_live as smoke
 
 
 @pytest.fixture(autouse=True)

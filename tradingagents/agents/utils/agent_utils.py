@@ -23,12 +23,12 @@ from tradingagents.agents.utils.news_data_tools import (
 )
 from tradingagents.agents.utils.prediction_markets_tools import get_prediction_markets
 from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+from tradingagents.dataflows.contracts import collect_data_contract_status_from_messages
 from tradingagents.dataflows.instruments import (
     InstrumentType,
     MarketType,
     detect_market_type,
 )
-from tradingagents.dataflows.contracts import collect_data_contract_status_from_messages
 from tradingagents.dataflows.symbol_utils import normalize_symbol
 
 # Public surface: the data tools are imported here so agents and the graph

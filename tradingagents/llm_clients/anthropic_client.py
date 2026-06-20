@@ -1,5 +1,5 @@
 import re
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from langchain_anthropic import ChatAnthropic
@@ -30,7 +30,7 @@ def _supports_effort(model: str) -> bool:
     return model_lc in _EFFORT_EXACT or bool(_EFFORT_PATTERN.match(model_lc))
 
 
-def _is_custom_anthropic_gateway(base_url: Optional[str]) -> bool:
+def _is_custom_anthropic_gateway(base_url: str | None) -> bool:
     """Whether the configured endpoint is not Anthropic's official API host."""
     if not base_url:
         return False
