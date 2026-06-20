@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 import tradingagents.dataflows.market_data_validator as validator
+from tradingagents.dataflows.contracts import DataResult, SourceMeta, data_notice
 
 
 def _sample_ohlcv() -> pd.DataFrame:
@@ -19,6 +20,35 @@ def _sample_ohlcv() -> pd.DataFrame:
         "Close": closes,
         "Volume": [1_000_000 + i for i in range(len(dates))],
     })
+
+
+def _contract_result(
+    symbol: str,
+    semantic: str,
+    data: pd.DataFrame,
+    *,
+    as_of: str | None = None,
+    ok: bool = True,
+    missing_reason: str | None = None,
+    error_type: str | None = None,
+    notices=(),
+) -> DataResult:
+    parsed = pd.to_datetime(data.get("Date"), errors="coerce").dropna() if not data.empty else pd.Series(dtype="datetime64[ns]")
+    return DataResult(
+        meta=SourceMeta(
+            vendor="akshare",
+            source=f"fake_{semantic}",
+            symbol=symbol,
+            semantic=semantic,
+            as_of=as_of if as_of is not None else (None if parsed.empty else parsed.max().strftime("%Y-%m-%d")),
+            retrieved_at="2026-05-22 12:00:00",
+        ),
+        payload=data,
+        notices=tuple(notices),
+        ok=ok,
+        missing_reason=missing_reason,
+        error_type=error_type,
+    )
 
 
 @pytest.mark.unit
@@ -63,6 +93,13 @@ class TestVerifiedSnapshot:
         assert 0 < len(close_rows) <= 30
 
     def test_cn_otc_fund_snapshot_uses_nav_history(self, monkeypatch):
+        nav_data = pd.DataFrame(
+            [
+                {"Date": "2026-05-20", "Close": 4.5, "Open": 4.5, "High": 4.5, "Low": 4.5, "Volume": 0},
+                {"Date": "2026-05-21", "Close": 4.6, "Open": 4.6, "High": 4.6, "Low": 4.6, "Volume": 0},
+                {"Date": "2026-06-01", "Close": 9.9, "Open": 9.9, "High": 9.9, "Low": 9.9, "Volume": 0},
+            ]
+        )
         monkeypatch.setattr(
             validator,
             "load_ohlcv",
@@ -70,20 +107,16 @@ class TestVerifiedSnapshot:
         )
         monkeypatch.setattr(
             validator,
-            "get_fund_nav_history",
-            lambda symbol, start, end: pd.DataFrame(
-                [
-                    {"Date": "2026-05-20", "Close": 4.5, "Open": 4.5, "High": 4.5, "Low": 4.5, "Volume": 0},
-                    {"Date": "2026-05-21", "Close": 4.6, "Open": 4.6, "High": 4.6, "Low": 4.6, "Volume": 0},
-                    {"Date": "2026-06-01", "Close": 9.9, "Open": 9.9, "High": 9.9, "Low": 9.9, "Volume": 0},
-                ]
-            ),
+            "get_stock_result",
+            lambda symbol, start, end: _contract_result(symbol, "nav", nav_data, as_of="2026-05-21"),
         )
 
         snap = validator.build_verified_market_snapshot("012920", "2026-05-21")
 
         assert "Verified fund NAV snapshot for 012920" in snap
         assert "Latest NAV row used: 2026-05-21" in snap
+        assert "Verified Market Data Contract Gate" in snap
+        assert "daily fund NAV" in snap
         assert "| NAV | 4.60 |" in snap
         assert "9.90" not in snap
 
@@ -96,14 +129,16 @@ class TestVerifiedSnapshot:
         )
         monkeypatch.setattr(
             validator,
-            "_load_cn_ohlcv",
-            lambda symbol, curr_date: calls.append((symbol, curr_date)) or _sample_ohlcv(),
+            "get_stock_result",
+            lambda symbol, start, end: calls.append((symbol, start, end))
+            or _contract_result(symbol, "ohlcv", _sample_ohlcv()),
         )
 
         snap = validator.build_verified_market_snapshot("600519", "2026-05-20")
 
-        assert calls == [("600519.SH", "2026-05-20")]
+        assert calls == [("600519.SH", "2021-05-20", "2026-05-20")]
         assert "Verified market data snapshot for 600519" in snap
+        assert "Verified Market Data Contract Gate" in snap
         assert "Latest trading row used: 2026-05-20" in snap
 
     def test_cn_listed_fund_snapshot_uses_akshare_ohlcv(self, monkeypatch):
@@ -115,15 +150,37 @@ class TestVerifiedSnapshot:
         )
         monkeypatch.setattr(
             validator,
-            "_load_cn_ohlcv",
-            lambda symbol, curr_date: calls.append((symbol, curr_date)) or _sample_ohlcv(),
+            "get_stock_result",
+            lambda symbol, start, end: calls.append((symbol, start, end))
+            or _contract_result(symbol, "ohlcv", _sample_ohlcv()),
         )
 
         snap = validator.build_verified_market_snapshot("510300", "2026-05-20")
 
-        assert calls == [("510300.SH", "2026-05-20")]
+        assert calls == [("510300.SH", "2021-05-20", "2026-05-20")]
         assert "Verified market data snapshot for 510300" in snap
         assert "Recent verified closes" in snap
+
+    def test_cn_snapshot_blocks_schema_drift_contract(self, monkeypatch):
+        monkeypatch.setattr(
+            validator,
+            "load_ohlcv",
+            lambda s, d: (_ for _ in ()).throw(AssertionError("yfinance loader should not be called")),
+        )
+        monkeypatch.setattr(
+            validator,
+            "get_stock_result",
+            lambda symbol, start, end: _contract_result(
+                symbol,
+                "ohlcv",
+                _sample_ohlcv(),
+                error_type="schema_drift",
+                notices=(data_notice("schema_drift", "drift"),),
+            ),
+        )
+
+        with pytest.raises(ValueError, match="schema_drift"):
+            validator.build_verified_market_snapshot("600519", "2026-05-20")
 
 
 @pytest.mark.unit

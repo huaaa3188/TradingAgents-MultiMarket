@@ -28,6 +28,7 @@ from tradingagents.dataflows.akshare import (
     get_news_result,
     get_stock_result,
 )
+from tradingagents.dataflows.contracts import validate_data_result
 from tradingagents.dataflows.instruments import (
     InstrumentType,
     MarketType,
@@ -254,21 +255,25 @@ def _check_identity(target: SmokeTarget, normalized: str) -> SmokeResult:
     return _result(target, normalized, "identity", STATUS_OK, observed)
 
 
-def _contract_part(name: str, result) -> tuple[bool, str]:
-    has_contract = bool(
-        getattr(result, "meta", None)
-        and result.meta.source
-        and result.meta.semantic
-        and result.meta.symbol
+def _contract_part(
+    name: str,
+    result,
+    *,
+    analysis_date: str,
+    expected_semantic: str,
+    max_staleness_days: int | None = None,
+) -> tuple[bool, str]:
+    gate = validate_data_result(
+        result,
+        analysis_date=analysis_date,
+        expected_semantic=expected_semantic,
+        max_staleness_days=max_staleness_days,
     )
-    if not has_contract:
-        return False, f"{name}=missing_contract_fields"
-    if not result.ok and not (result.missing_reason or result.error_type):
-        return False, f"{name}=missing_diagnostic"
-    status = "ok" if result.ok else f"missing:{result.missing_reason or result.error_type}"
-    return True, (
+    status = "pass" if gate.ok else "fail:" + ",".join(notice.code for notice in gate.failures)
+    return gate.ok, (
         f"{name}={status}; semantic={result.meta.semantic}; source={result.meta.source}; "
-        f"as_of={result.meta.as_of or 'n/a'}; rows={result.rows}; notices={len(result.notices)}"
+        f"as_of={result.meta.as_of or 'n/a'}; rows={result.rows}; "
+        f"warnings={len(gate.warnings)}; failures={len(gate.failures)}"
     )
 
 
@@ -278,10 +283,34 @@ def _check_data_contract(
     start_date: str,
     end_date: str,
 ) -> SmokeResult:
+    max_staleness_days = max(0, (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days)
+    price_semantic = "nav" if target.expected_market == MarketType.CN_FUND else "ohlcv"
+    fundamentals_semantic = (
+        "fund_profile"
+        if target.expected_instrument == InstrumentType.FUND
+        else "company_profile"
+    )
     parts = [
-        _contract_part("price", get_stock_result(target.symbol, start_date, end_date)),
-        _contract_part("fundamentals", get_fundamentals_result(target.symbol, end_date)),
-        _contract_part("news", get_news_result(target.symbol, start_date, end_date)),
+        _contract_part(
+            "price",
+            get_stock_result(target.symbol, start_date, end_date),
+            analysis_date=end_date,
+            expected_semantic=price_semantic,
+            max_staleness_days=max_staleness_days,
+        ),
+        _contract_part(
+            "fundamentals",
+            get_fundamentals_result(target.symbol, end_date),
+            analysis_date=end_date,
+            expected_semantic=fundamentals_semantic,
+        ),
+        _contract_part(
+            "news",
+            get_news_result(target.symbol, start_date, end_date),
+            analysis_date=end_date,
+            expected_semantic="news",
+            max_staleness_days=max_staleness_days,
+        ),
     ]
     ok = all(part_ok for part_ok, _ in parts)
     detail = " | ".join(part_detail for _, part_detail in parts)

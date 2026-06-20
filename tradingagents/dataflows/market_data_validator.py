@@ -15,9 +15,10 @@ from collections.abc import Iterable
 import pandas as pd
 from stockstats import wrap
 
+from tradingagents.dataflows.akshare import get_stock_result
+from tradingagents.dataflows.contracts import ContractGateResult, render_contract_gate, validate_data_result
 from tradingagents.dataflows.instruments import MarketType, detect_market_type, normalize_ticker_symbol
 from tradingagents.dataflows.stockstats_utils import load_ohlcv
-from tradingagents.dataflows.tiantian_fund import get_fund_nav_history
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
 DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
@@ -27,7 +28,11 @@ DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
 )
 
 
-def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
+def _verified_rows(
+    symbol: str,
+    curr_date: str,
+    max_staleness_days: int | None = None,
+) -> tuple[pd.DataFrame, ContractGateResult | None]:
     """OHLCV on or before curr_date, date-sorted. Raises if nothing usable.
 
     ``load_ohlcv`` already normalizes the Date column and filters out
@@ -37,13 +42,24 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     normalized = normalize_ticker_symbol(symbol)
     market_type = detect_market_type(normalized)
     if market_type == MarketType.CN_FUND:
-        data = get_fund_nav_history(normalized, None, curr_date)
+        data, gate = _load_cn_contract_rows(
+            normalized,
+            curr_date,
+            expected_semantic="nav",
+            max_staleness_days=max_staleness_days,
+        )
         no_data_label = "NAV"
     elif market_type == MarketType.CN_A:
-        data = _load_cn_ohlcv(normalized, curr_date)
+        data, gate = _load_cn_contract_rows(
+            normalized,
+            curr_date,
+            expected_semantic="ohlcv",
+            max_staleness_days=max_staleness_days,
+        )
         no_data_label = "OHLCV"
     else:
         data = load_ohlcv(symbol, curr_date)
+        gate = None
         no_data_label = "OHLCV"
     if data is None or data.empty:
         raise ValueError(f"No {no_data_label} data available for {symbol}.")
@@ -54,15 +70,30 @@ def _verified_rows(symbol: str, curr_date: str) -> pd.DataFrame:
     df = df[df["Date"] <= pd.to_datetime(curr_date)].sort_values("Date")
     if df.empty:
         raise ValueError(f"No {no_data_label} rows on or before {curr_date} for {symbol}.")
-    return df
+    return df, gate
 
 
-def _load_cn_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
+def _load_cn_contract_rows(
+    symbol: str,
+    curr_date: str,
+    *,
+    expected_semantic: str,
+    max_staleness_days: int | None,
+) -> tuple[pd.DataFrame, ContractGateResult]:
     end_dt = pd.to_datetime(curr_date)
     start_date = (end_dt - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
-    from tradingagents.dataflows.akshare import _load_ohlcv
 
-    return _load_ohlcv(symbol, start_date, curr_date)
+    result = get_stock_result(symbol, start_date, curr_date)
+    gate = validate_data_result(
+        result,
+        analysis_date=curr_date,
+        expected_semantic=expected_semantic,
+        max_staleness_days=max_staleness_days,
+    )
+    if not gate.ok:
+        raise ValueError(render_contract_gate(gate, "Verified Market Data Contract Gate"))
+    data = result.payload if isinstance(result.payload, pd.DataFrame) else pd.DataFrame()
+    return data, gate
 
 
 def _fmt(value) -> str:
@@ -91,7 +122,8 @@ def build_verified_market_snapshot(
     # columns, so read raw prices from `df` and indicators from `stock_df`.
     normalized_symbol = normalize_ticker_symbol(symbol)
     is_otc_fund = detect_market_type(normalized_symbol) == MarketType.CN_FUND
-    df = _verified_rows(normalized_symbol, curr_date)
+    max_staleness_days = max(0, min(int(look_back_days), 30))
+    df, contract_gate = _verified_rows(normalized_symbol, curr_date, max_staleness_days)
     stock_df = wrap(df.copy())
 
     selected = tuple(indicators or DEFAULT_SNAPSHOT_INDICATORS)
@@ -122,12 +154,18 @@ def build_verified_market_snapshot(
             else f"- Latest trading row used: {latest_date}"
         ),
         "- Rows after the requested analysis date are excluded before verification.",
-        "",
-        "### Latest verified NAV row" if is_otc_fund else "### Latest verified OHLCV row",
-        "",
-        "| Field | Value |",
-        "|---|---:|",
     ]
+    if contract_gate is not None:
+        lines.extend(["", render_contract_gate(contract_gate, "Verified Market Data Contract Gate")])
+    lines.extend(
+        [
+            "",
+            "### Latest verified NAV row" if is_otc_fund else "### Latest verified OHLCV row",
+            "",
+            "| Field | Value |",
+            "|---|---:|",
+        ]
+    )
     if is_otc_fund:
         lines.append(f"| NAV | {_fmt(latest.get('Close'))} |")
         if "Pct Change" in latest:

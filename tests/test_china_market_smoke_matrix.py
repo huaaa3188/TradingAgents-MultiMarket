@@ -4,7 +4,7 @@ import pytest
 
 import tradingagents.default_config as default_config
 from tradingagents.dataflows.config import set_config
-from tradingagents.dataflows.contracts import DataResult, SourceMeta
+from tradingagents.dataflows.contracts import DataResult, SourceMeta, data_notice
 from scripts import smoke_akshare_live as smoke
 
 
@@ -30,7 +30,15 @@ def _fake_snapshot(symbol: str, curr_date: str, look_back_days: int = 30):
     return f"## Verified market data snapshot for {symbol}"
 
 
-def _fake_contract_result(symbol: str, semantic: str = "ohlcv", ok: bool = True):
+def _fake_contract_result(
+    symbol: str,
+    semantic: str = "ohlcv",
+    ok: bool = True,
+    *,
+    missing_reason: str | None = None,
+    error_type: str | None = None,
+    notices=(),
+):
     return DataResult(
         meta=SourceMeta(
             vendor="akshare",
@@ -41,9 +49,25 @@ def _fake_contract_result(symbol: str, semantic: str = "ohlcv", ok: bool = True)
             retrieved_at="2026-05-22 12:00:00",
         ),
         payload="contract payload",
+        notices=tuple(notices),
         ok=ok,
-        missing_reason=None if ok else "no_rows",
+        missing_reason=missing_reason if missing_reason is not None else (None if ok else "no_rows"),
+        error_type=error_type,
     )
+
+
+def _fake_price_contract(symbol: str):
+    semantic = "nav" if smoke.detect_market_type(symbol) == smoke.MarketType.CN_FUND else "ohlcv"
+    return _fake_contract_result(symbol, semantic)
+
+
+def _fake_fundamentals_contract(symbol: str):
+    semantic = (
+        "fund_profile"
+        if smoke.detect_instrument_type(symbol) == smoke.InstrumentType.FUND
+        else "company_profile"
+    )
+    return _fake_contract_result(symbol, semantic)
 
 
 def _successful_route(method: str, *args):
@@ -84,11 +108,11 @@ def test_run_matrix_reports_all_capabilities_ok(monkeypatch):
     monkeypatch.setattr(smoke, "route_to_vendor", _successful_route)
     monkeypatch.setattr(smoke, "build_verified_market_snapshot", _fake_snapshot)
     monkeypatch.setattr(smoke, "Propagator", FakePropagator)
-    monkeypatch.setattr(smoke, "get_stock_result", lambda symbol, start, end: _fake_contract_result(symbol, "ohlcv"))
+    monkeypatch.setattr(smoke, "get_stock_result", lambda symbol, start, end: _fake_price_contract(symbol))
     monkeypatch.setattr(
         smoke,
         "get_fundamentals_result",
-        lambda symbol, end: _fake_contract_result(symbol, "fund_profile"),
+        lambda symbol, end: _fake_fundamentals_contract(symbol),
     )
     monkeypatch.setattr(smoke, "get_news_result", lambda symbol, start, end: _fake_contract_result(symbol, "news"))
 
@@ -108,6 +132,51 @@ def test_run_matrix_reports_all_capabilities_ok(monkeypatch):
         "macro_news",
     }
     assert any(result.symbol == "GLOBAL" and result.capability == "macro_news" for result in results)
+
+
+def test_data_contract_marks_schema_drift_failed(monkeypatch):
+    monkeypatch.setattr(
+        smoke,
+        "get_stock_result",
+        lambda symbol, start, end: _fake_contract_result(
+            symbol,
+            "ohlcv",
+            error_type="schema_drift",
+            notices=(data_notice("schema_drift", "drift"),),
+        ),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "get_fundamentals_result",
+        lambda symbol, end: _fake_contract_result(symbol, "company_profile"),
+    )
+    monkeypatch.setattr(smoke, "get_news_result", lambda symbol, start, end: _fake_contract_result(symbol, "news"))
+
+    target = smoke._build_targets(("600519",), ())[0]
+    result = smoke._check_data_contract(target, "600519.SH", "2026-05-12", "2026-05-22")
+
+    assert result.status == smoke.STATUS_FAIL
+    assert "schema_drift" in result.detail
+
+
+def test_data_contract_marks_missing_result_failed(monkeypatch):
+    monkeypatch.setattr(
+        smoke,
+        "get_stock_result",
+        lambda symbol, start, end: _fake_contract_result(symbol, "ohlcv", ok=False, missing_reason="no_rows"),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "get_fundamentals_result",
+        lambda symbol, end: _fake_contract_result(symbol, "company_profile"),
+    )
+    monkeypatch.setattr(smoke, "get_news_result", lambda symbol, start, end: _fake_contract_result(symbol, "news"))
+
+    target = smoke._build_targets(("600519",), ())[0]
+    result = smoke._check_data_contract(target, "600519.SH", "2026-05-12", "2026-05-22")
+
+    assert result.status == smoke.STATUS_FAIL
+    assert "no_rows" in result.detail
 
 
 def test_missing_marker_marks_capability_failed(monkeypatch):
